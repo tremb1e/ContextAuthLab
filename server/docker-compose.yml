@@ -1,0 +1,27 @@
+services:
+  cca-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: contextauthlab/server:latest
+    container_name: cca-server
+    restart: unless-stopped
+    environment:
+      SERVER_DATA_DIR: /data/paper
+      SERVER_LOG_DIR: /app/logs
+      SERVER_STUDY_SALT: Continuous_Authentication
+      RULES_VERSION: "1"
+      INGEST_REQUIRE_AUTH: "false"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../data/paper:/data/paper
+      - ../logs:/app/logs
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s

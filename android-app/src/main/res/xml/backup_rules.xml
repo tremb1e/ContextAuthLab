@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- 
+    Exclude sensitive data from backups
+    -->
+    <exclude domain="sharedpref" path="contextauthlab_secure.xml"/>
+    <exclude domain="sharedpref" path="contextauthlab_secure_fallback.xml"/>
+    <exclude domain="sharedpref" path="contextauthlab_settings.xml"/>
+    <exclude domain="database" path="upload_queue.db"/>
+    <exclude domain="file" path="upload_queue/"/>
+    <exclude domain="file" path="dead_letter/"/>
+</full-backup-content>

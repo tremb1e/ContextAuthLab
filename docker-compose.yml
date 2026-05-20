@@ -1,0 +1,36 @@
+services:
+  contextauthlab-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    image: contextauthlab/server:${VERSION:-latest}
+    container_name: cca-server
+    restart: unless-stopped
+    ports:
+      - "${SERVER_PORT:-8000}:8000"
+    environment:
+      SERVER_DATA_DIR: /data
+      SERVER_LOG_DIR: /app/logs
+      SERVER_STUDY_SALT: ${SERVER_STUDY_SALT:-Continuous_Authentication}
+      RULES_VERSION: ${RULES_VERSION:-1}
+      INGEST_REQUIRE_AUTH: ${INGEST_REQUIRE_AUTH:-false}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./data/paper:/data:rw
+      - ./logs:/app/logs:rw
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+    tmpfs:
+      - /tmp

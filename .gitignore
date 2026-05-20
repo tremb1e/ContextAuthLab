@@ -1,0 +1,75 @@
+# Gradle / Android build outputs
+.gradle/
+.kotlin/
+**/build/
+*.apk
+*.aab
+*.aar
+*.ap_
+*.dex
+*.class
+*.kotlin_module
+local.properties
+.externalNativeBuild/
+.cxx/
+.navigation/
+captures/
+robolectric-deps/
+
+# Android signing and app secrets
+*.jks
+*.keystore
+*.p12
+*.pfx
+keystore.properties
+google-services.json
+
+# Python caches / test state
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.venv/
+venv/
+env/
+
+# Local runtime data, logs, and generated artifacts
+data/paper/
+logs/
+artifacts/*.apk
+artifacts/*.aab
+*.log
+*.hprof
+tools/*_result.json
+
+# Local environment files; keep examples tracked
+.env
+.env.local
+.env.*.local
+!.env.example
+!server/.env.example
+
+# Docker / compose local overrides
+docker-compose.override.yml
+
+# IDEs and editors
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+out/
+*~
+*.swp
+*.swo
+
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini
