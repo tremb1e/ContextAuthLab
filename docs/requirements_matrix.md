@@ -12,8 +12,8 @@
 | APP-08 | Device ID | HMAC-SHA256(serverStudySalt, ANDROID_ID), 64 lowercase hex, cached | No hardware IDs such as IMEI/serial/MAC/MediaDrm |
 | APP-09 | Accessibility | Read-only node structure with allowed fields | No performAction, gestures, screenshots, auto-click, or keylogging |
 | APP-10 | Sensor collection | Accelerometer, gyroscope, magnetic field at fixed 100 Hz | registerListener uses 10,000 us sampling period; status displays measured acc/gyro/mag rates |
-| APP-11 | ScreenGate | Stop collection while screen off or locked | Partial buffers are discarded and not queued |
-| APP-12 | Redaction | Drop password nodes, drop editable text, hash package/view IDs, redact fixed-format PII, apply server-provided rule payload when present | Current server rule list is empty; serialized batches contain no raw input text; server rejects raw UI keys and requires `diagnostics.redaction_applied: true` |
+| APP-11 | ScreenGate | Stop collection while screen off or locked | Existing redacted samples/events are flushed or queued before pause, then the same task context can resume after unlock |
+| APP-12 | Redaction | Drop password nodes, drop editable text, hash package/view IDs, redact fixed-format PII and ordinary UI prose, apply server-provided rule payload when present | Server rule list and package blocklist are non-empty; serialized batches contain no raw input text; server rejects raw UI keys, prose in `*_redacted` UI fields, and missing `diagnostics.redaction_applied: true` |
 | APP-15 | Internationalization | Chinese and English UI content selected by system language | Major participant-facing UI, tasks, notification, protocol, diagnostics, and dialogs have Chinese/English variants |
 | APP-13 | Transport | UTF-8 JSON -> LZ4 frame -> SHA-256 envelope over HTTP(S) | No AES/PBKDF2/AAD/public-key envelope protocol |
 | APP-14 | Failure queue | filesDir/upload_queue, metadata DB, 200 MB FIFO, retry/dead letter | Offline batches are persisted and replayable |

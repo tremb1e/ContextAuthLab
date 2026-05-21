@@ -28,6 +28,7 @@ data class RawNodeSnapshot(
 data class RedactionSummary(
     var droppedPasswordNodes: Int = 0,
     var droppedEditableTexts: Int = 0,
+    var redactedPlainText: Int = 0,
     var replacedEmail: Int = 0,
     var replacedPhone: Int = 0,
     var replacedUrl: Int = 0,
@@ -40,6 +41,7 @@ data class RedactionSummary(
     fun asMap(): Map<String, Int> = mapOf(
         "dropped_password_nodes" to droppedPasswordNodes,
         "dropped_editable_texts" to droppedEditableTexts,
+        "redacted_plain_text" to redactedPlainText,
         "replaced_email" to replacedEmail,
         "replaced_phone" to replacedPhone,
         "replaced_url" to replacedUrl,
@@ -53,7 +55,8 @@ data class RedactionSummary(
 data class RedactionPatternRule(
     val name: String,
     val pattern: String,
-    val replacement: String
+    val replacement: String,
+    val target: String = "text"
 ) {
     val regex: Regex? = runCatching { Regex(pattern) }.getOrNull()
 }
@@ -63,6 +66,7 @@ data class RedactionPolicy(
     val ruleHash: String = "0".repeat(64),
     val packageBlocklist: List<String> = emptyList(),
     val maxTextLength: Int = 128,
+    val defaultTextAction: String = "REDACT",
     val patternRules: List<RedactionPatternRule> = emptyList()
 )
 
@@ -87,6 +91,7 @@ class RedactionEngine(
     private val idNum = Regex("""(?<![\w-])(?:\d{15}|\d{17}[\dXx])(?![\w-])""")
     private val longNumber = Regex("""(?<!\d)\d{4,}(?!\d)""")
     private val token = Regex("""\b(?:[A-Fa-f0-9]{24,}|[A-Za-z0-9+/=_-]{32,})\b""")
+    private val placeholder = Regex("""<[^<>\s]{2,64}>""")
     private val builtInSensitivePackages = listOf(
         "dialer",
         "contacts",
@@ -146,7 +151,7 @@ class RedactionEngine(
         if (value.isBlank()) return "<EMPTY>"
         val policy = policyProvider()
         var result: String = value
-        policy.patternRules.forEach { rule ->
+        policy.patternRules.filter { it.appliesToUiText() }.forEach { rule ->
             val regex = rule.regex ?: return@forEach
             val replacement = rule.replacement.ifBlank { "<REDACTED>" }
             result = replace(result, regex, replacement) {
@@ -154,20 +159,53 @@ class RedactionEngine(
             }
         }
         if (result.length > policy.maxTextLength.coerceAtLeast(1)) return "<LONG_TEXT_DROPPED>"
-        result = replace(result, card, "<CARD>") { summary.replacedCard += 1 }
         result = replace(result, idNum, "<ID_NUM>") { summary.replacedIdNumber += 1 }
+        result = replace(result, card, "<CARD>") { summary.replacedCard += 1 }
         result = replace(result, email, "<EMAIL>") { summary.replacedEmail += 1 }
         result = replace(result, phone, "<PHONE>") { summary.replacedPhone += 1 }
         result = replace(result, url, "<URL>") { summary.replacedUrl += 1 }
         result = replace(result, token, "<TOKEN>") { summary.replacedToken += 1 }
         result = replace(result, longNumber, "<NUM>") { summary.replacedNumber += 1 }
-        return result
+        return when (policy.defaultTextAction.uppercase()) {
+            "ALLOW" -> result
+            "DROP" -> {
+                summary.redactedPlainText += 1
+                "<DROPPED>"
+            }
+            else -> redactPlainTextSegments(result, summary)
+        }
     }
 
     private fun replace(input: String, regex: Regex, replacement: String, onHit: () -> Unit): String {
         if (!regex.containsMatchIn(input)) return input
         regex.findAll(input).forEach { _ -> onHit() }
         return regex.replace(input, replacement)
+    }
+
+    private fun RedactionPatternRule.appliesToUiText(): Boolean =
+        target.lowercase() in setOf("text", "content_description", "node")
+
+    private fun redactPlainTextSegments(value: String, summary: RedactionSummary): String {
+        val tokens = mutableListOf<String>()
+        var cursor = 0
+        placeholder.findAll(value).forEach { match ->
+            val before = value.substring(cursor, match.range.first)
+            if (before.isNotBlank()) tokens.add("<TEXT_REDACTED>")
+            tokens.add(match.value)
+            cursor = match.range.last + 1
+        }
+        val tail = value.substring(cursor)
+        if (tail.isNotBlank()) tokens.add("<TEXT_REDACTED>")
+        if (tokens.isEmpty()) {
+            summary.redactedPlainText += 1
+            return "<TEXT_REDACTED>"
+        }
+        val compact = tokens.fold(mutableListOf<String>()) { acc, token ->
+            if (acc.lastOrNull() != token) acc.add(token)
+            acc
+        }
+        if (compact.any { it == "<TEXT_REDACTED>" }) summary.redactedPlainText += 1
+        return compact.joinToString(" ")
     }
 }
 

@@ -12,7 +12,7 @@
 - Screenshots, screen recording, raw keystrokes, automatic input, automatic clicks, gestures, or remote control actions.
 - Password nodes or their descendants.
 - Raw input field text.
-- Raw UI text by default.
+- Raw UI prose by default. Non-sensitive visible text is replaced with `<TEXT_REDACTED>`; fixed-format sensitive text is replaced with typed placeholders.
 
 ## Device ID
 
@@ -29,9 +29,9 @@ The default study salt is `Continuous_Authentication`. Hardware identifiers are 
 
 ## Redaction
 
-Client-side redaction is the primary protection. Email, phone, URL, long number, card-like, ID-number-like, and token-like content is replaced with placeholders. Editable text is dropped. Password subtrees are dropped.
+Client-side redaction is the primary protection. Email, phone, URL, long number, card-like, ID-number-like, and token-like content is replaced with placeholders. Ordinary visible UI prose is replaced with `<TEXT_REDACTED>`. Editable text is dropped. Password subtrees are dropped. Package names and view IDs are SHA-256 hashes.
 
-Server performs only a second-line check. If obvious unredacted sensitive strings are found, the batch is quarantined and rejected. Server also rejects payloads that use raw Accessibility/UI field keys such as `text`, `contentDescription`, `package_name`, `view_id`, or `window_title`, and requires `diagnostics.redaction_applied: true`.
+Server performs only a second-line check. If obvious unredacted sensitive strings or prose inside `*_redacted` UI fields are found, the batch is quarantined and rejected. Server also rejects payloads that use raw Accessibility/UI field keys such as `text`, `contentDescription`, `package_name`, `view_id`, `viewIdResourceName`, or `window_title`, and requires `diagnostics.redaction_applied: true`.
 
 ## Storage
 

@@ -22,8 +22,24 @@ import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 
 class CollectionCoordinator(private val context: Context) {
+    private data class ActiveCollectionContext(
+        val taskCategory: TaskCategory?,
+        val taskSessionId: String?,
+        val taskStartedAt: Long?,
+        val gatedResume: Boolean,
+        val baseElapsedNanos: Long
+    )
+
+    private data class PendingStoppedBatch(
+        val state: UiState,
+        val samples: List<SensorSample>,
+        val events: List<ContextEventSnapshot>,
+        val collectionContext: ActiveCollectionContext
+    )
+
     private val appContext = context.applicationContext
     private val settingsStore = SettingsStore(appContext)
     private val sensorCollector = SensorCollector(appContext)
@@ -51,6 +67,9 @@ class CollectionCoordinator(private val context: Context) {
     private var gatedResume = false
     private var resumeAfterGate = false
     private var screenReceiverRegistered = false
+    private val serializeCompressTimes = ArrayDeque<Long>()
+    private val shaTimes = ArrayDeque<Long>()
+    private val uploadTimes = ArrayDeque<Long>()
 
     fun startRuntime(scope: CoroutineScope) {
         scope.launch {
@@ -65,9 +84,15 @@ class CollectionCoordinator(private val context: Context) {
                     accelerometerHz = metrics.accelerometerHz,
                     gyroscopeHz = metrics.gyroscopeHz,
                     magnetometerHz = metrics.magnetometerHz,
+                    accelerometerCollectionHz = metrics.accelerometerCollectionHz,
+                    gyroscopeCollectionHz = metrics.gyroscopeCollectionHz,
+                    magnetometerCollectionHz = metrics.magnetometerCollectionHz,
                     accelerometerAvailable = metrics.accelerometerAvailable,
                     gyroscopeAvailable = metrics.gyroscopeAvailable,
-                    magnetometerAvailable = metrics.magnetometerAvailable
+                    magnetometerAvailable = metrics.magnetometerAvailable,
+                    accelerometerLostSamples = metrics.accelerometerLostSamples,
+                    gyroscopeLostSamples = metrics.gyroscopeLostSamples,
+                    magnetometerLostSamples = metrics.magnetometerLostSamples
                 )
             }
         }
@@ -147,6 +172,15 @@ class CollectionCoordinator(private val context: Context) {
         refreshPermissionState()
         val state = mutableUi.value
         if (!canStart(state)) return
+        if (category == null && !state.settings.allowThirdParty) return
+        val previousContext = currentCollectionContext()
+        if (state.status == CollectionStatus.RUNNING && previousContext.taskCategory == category) return
+        if (state.status == CollectionStatus.RUNNING) {
+            collectionJob?.cancel()
+            val samples = sensorCollector.stop()
+            val events = drainContextEvents()
+            scope.launch { uploadBatch(state, samples, events, previousContext) }
+        }
         val previousCategory = taskCategory
         val previousSession = taskSessionId
         val previousStartedAt = taskStartedAt
@@ -173,25 +207,23 @@ class CollectionCoordinator(private val context: Context) {
     }
 
     fun stopCollection(scope: CoroutineScope) {
+        val state = mutableUi.value
+        val finishedContext = currentCollectionContext()
         collectionJob?.cancel()
-        scope.launch { flushBatch(finalFlush = true) }
-        sensorCollector.stop()
+        val samples = sensorCollector.stop()
+        val events = drainContextEvents()
         taskCategory = null
         taskSessionId = null
         taskStartedAt = null
         mutableUi.value = mutableUi.value.copy(status = CollectionStatus.IDLE)
+        scope.launch { uploadBatch(state, samples, events, finishedContext) }
     }
 
-    fun pauseForScreen(reason: CollectionStatus) {
-        resumeAfterGate = mutableUi.value.status == CollectionStatus.RUNNING
-        collectionJob?.cancel()
-        sensorCollector.stop()
-        synchronized(contextEvents) { contextEvents.clear() }
-        val history = (listOf("${System.currentTimeMillis()}: $reason") + mutableUi.value.diagnostics.screenGateHistory).take(10)
-        mutableUi.value = mutableUi.value.copy(
-            status = reason,
-            diagnostics = mutableUi.value.diagnostics.copy(screenGateHistory = history)
-        )
+    fun pauseForScreen(reason: CollectionStatus, scope: CoroutineScope? = null) {
+        val pending = stopForScreenGate(reason)
+        if (scope != null && (pending.samples.isNotEmpty() || pending.events.isNotEmpty())) {
+            scope.launch { uploadBatch(pending.state, pending.samples, pending.events, pending.collectionContext) }
+        }
     }
 
     fun resumeAfterUnlock(scope: CoroutineScope) {
@@ -255,6 +287,7 @@ class CollectionCoordinator(private val context: Context) {
             state.notificationAllowed &&
             state.serverReachable &&
             state.clock.synced &&
+            state.settings.ruleHash != "0".repeat(64) &&
             isScreenActive() &&
             (!state.settings.wifiOnly || isWifiConnected())
 
@@ -285,35 +318,56 @@ class CollectionCoordinator(private val context: Context) {
         val state = mutableUi.value
         if (state.status != CollectionStatus.RUNNING && !finalFlush) return
         if (!isScreenActive()) {
-            pauseForScreen(CollectionStatus.PAUSED_BY_SCREEN_OFF)
+            val pending = stopForScreenGate(CollectionStatus.PAUSED_BY_SCREEN_OFF)
+            uploadBatch(pending.state, pending.samples, pending.events, pending.collectionContext)
             return
         }
         val samples = sensorCollector.drain()
         val events = drainContextEvents()
+        uploadBatch(state, samples, events, currentCollectionContext())
+    }
+
+    private suspend fun uploadBatch(
+        state: UiState,
+        samples: List<SensorSample>,
+        events: List<ContextEventSnapshot>,
+        collectionContext: ActiveCollectionContext
+    ) {
         if (samples.isEmpty() && events.isEmpty()) return
+        val batch = buildBatch(state, samples, events, collectionContext)
+        val envelopeResult = JsonCodec.buildEnvelopeWithMetrics(
+            batch,
+            state.settings.ruleVersion,
+            state.settings.ruleHash
+        )
+        recordTiming(serializeCompressTimes, envelopeResult.serializeCompressMillis)
+        recordTiming(shaTimes, envelopeResult.shaMillis)
         if (state.settings.wifiOnly && !isWifiConnected()) {
-            val envelope = JsonCodec.buildEnvelope(
-                buildBatch(state, samples, events),
-                state.settings.ruleVersion,
-                state.settings.ruleHash
-            )
-            uploader.queueOnly(envelope, "paused_by_no_network")
-            mutableUi.value = state.copy(
-                status = CollectionStatus.PAUSED_BY_NO_NETWORK,
-                diagnostics = state.diagnostics.copy(
+            uploader.queueOnly(envelopeResult.envelope, "paused_by_no_network")
+            val currentUi = mutableUi.value
+            mutableUi.value = currentUi.copy(
+                status = if (collectionContext == currentCollectionContext()) {
+                    CollectionStatus.PAUSED_BY_NO_NETWORK
+                } else {
+                    currentUi.status
+                },
+                diagnostics = currentUi.diagnostics.copy(
                     queueEntries = uploader.queueEntries(),
                     queueBytes = uploader.queueBytes(),
+                    serializeCompressP50Ms = percentileMillis(serializeCompressTimes, 0.50),
+                    serializeCompressP95Ms = percentileMillis(serializeCompressTimes, 0.95),
+                    shaP50Ms = percentileMillis(shaTimes, 0.50),
+                    shaP95Ms = percentileMillis(shaTimes, 0.95),
                     earliestQueueEntryAtWallMillis = uploader.earliestQueueEntryAt()
                 )
             )
             return
         }
-        val batch = buildBatch(state, samples, events)
-        gatedResume = false
-        val serializeStart = System.nanoTime()
-        val envelope = JsonCodec.buildEnvelope(batch, state.settings.ruleVersion, state.settings.ruleHash)
-        val serializeMs = (System.nanoTime() - serializeStart) / 1_000_000L
-        val result = uploader.uploadOrQueue(state.settings.serverUrl, envelope)
+        if (collectionContext == currentCollectionContext()) gatedResume = false
+        val uploadStart = System.nanoTime()
+        val result = uploader.uploadOrQueue(state.settings.serverUrl, envelopeResult.envelope)
+        val uploadMillis = (System.nanoTime() - uploadStart) / 1_000_000L
+        recordTiming(uploadTimes, uploadMillis)
         val diagnostics = mutableUi.value.diagnostics
         val nextDiagnostics = if (result.isSuccess) {
             diagnostics.copy(
@@ -322,10 +376,12 @@ class CollectionCoordinator(private val context: Context) {
                 lastServerMessage = result.getOrDefault("ok"),
                 queueEntries = uploader.queueEntries(),
                 queueBytes = uploader.queueBytes(),
-                serializeCompressP50Ms = serializeMs,
-                serializeCompressP95Ms = maxOf(diagnostics.serializeCompressP95Ms, serializeMs),
-                shaP50Ms = serializeMs.coerceAtMost(1),
-                shaP95Ms = maxOf(diagnostics.shaP95Ms, serializeMs.coerceAtMost(1))
+                serializeCompressP50Ms = percentileMillis(serializeCompressTimes, 0.50),
+                serializeCompressP95Ms = percentileMillis(serializeCompressTimes, 0.95),
+                shaP50Ms = percentileMillis(shaTimes, 0.50),
+                shaP95Ms = percentileMillis(shaTimes, 0.95),
+                uploadP50Ms = percentileMillis(uploadTimes, 0.50),
+                uploadP95Ms = percentileMillis(uploadTimes, 0.95)
             )
         } else {
             diagnostics.copy(
@@ -334,6 +390,12 @@ class CollectionCoordinator(private val context: Context) {
                 lastError = result.exceptionOrNull()?.message ?: "upload_failed",
                 queueEntries = uploader.queueEntries(),
                 queueBytes = uploader.queueBytes(),
+                serializeCompressP50Ms = percentileMillis(serializeCompressTimes, 0.50),
+                serializeCompressP95Ms = percentileMillis(serializeCompressTimes, 0.95),
+                shaP50Ms = percentileMillis(shaTimes, 0.50),
+                shaP95Ms = percentileMillis(shaTimes, 0.95),
+                uploadP50Ms = percentileMillis(uploadTimes, 0.50),
+                uploadP95Ms = percentileMillis(uploadTimes, 0.95),
                 droppedDueToQuota = uploader.droppedDueToQuota(),
                 earliestQueueEntryAtWallMillis = uploader.earliestQueueEntryAt()
             )
@@ -342,6 +404,26 @@ class CollectionCoordinator(private val context: Context) {
             diagnostics = nextDiagnostics,
             recentUploadStatus = nextDiagnostics.lastServerMessage
         )
+    }
+
+    private fun currentCollectionContext(): ActiveCollectionContext = ActiveCollectionContext(
+        taskCategory = taskCategory,
+        taskSessionId = taskSessionId,
+        taskStartedAt = taskStartedAt,
+        gatedResume = gatedResume,
+        baseElapsedNanos = sensorCollector.currentBaseElapsedNanos()
+    )
+
+    private fun recordTiming(window: ArrayDeque<Long>, value: Long) {
+        window.addLast(value)
+        while (window.size > 100) window.removeFirst()
+    }
+
+    private fun percentileMillis(window: ArrayDeque<Long>, percentile: Double): Long {
+        if (window.isEmpty()) return 0L
+        val sorted = window.sorted()
+        val index = ((sorted.lastIndex) * percentile).roundToInt().coerceIn(0, sorted.lastIndex)
+        return sorted[index]
     }
 
     private fun refreshQueue() {
@@ -384,10 +466,10 @@ class CollectionCoordinator(private val context: Context) {
             object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     when (intent?.action) {
-                        Intent.ACTION_SCREEN_OFF -> pauseForScreen(CollectionStatus.PAUSED_BY_SCREEN_OFF)
+                        Intent.ACTION_SCREEN_OFF -> pauseForScreen(CollectionStatus.PAUSED_BY_SCREEN_OFF, scope)
                         Intent.ACTION_SCREEN_ON -> {
                             val keyguard = appContext.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-                            if (keyguard.isKeyguardLocked) pauseForScreen(CollectionStatus.PAUSED_BY_LOCKED)
+                            if (keyguard.isKeyguardLocked) pauseForScreen(CollectionStatus.PAUSED_BY_LOCKED, scope)
                         }
                         Intent.ACTION_USER_PRESENT -> resumeAfterUnlock(scope)
                     }
@@ -420,31 +502,61 @@ class CollectionCoordinator(private val context: Context) {
         copy
     }
 
+    private fun stopForScreenGate(reason: CollectionStatus): PendingStoppedBatch {
+        val state = mutableUi.value
+        val pausedContext = currentCollectionContext()
+        resumeAfterGate = state.status == CollectionStatus.RUNNING
+        collectionJob?.cancel()
+        val samples = sensorCollector.stop()
+        val events = drainContextEvents()
+        val history = (listOf("${System.currentTimeMillis()}: $reason") + state.diagnostics.screenGateHistory).take(10)
+        mutableUi.value = state.copy(
+            status = reason,
+            diagnostics = state.diagnostics.copy(screenGateHistory = history)
+        )
+        return PendingStoppedBatch(state, samples, events, pausedContext)
+    }
+
     private fun buildBatch(
         state: UiState,
         samples: List<SensorSample>,
-        events: List<ContextEventSnapshot>
+        events: List<ContextEventSnapshot>,
+        collectionContext: ActiveCollectionContext
     ): Batch {
-        val started = samples.minOfOrNull { it.wallTimeEstimatedMillis } ?: System.currentTimeMillis()
-        val ended = samples.maxOfOrNull { it.wallTimeEstimatedMillis } ?: System.currentTimeMillis()
-        val source = if (taskCategory != null) CollectionSource.BUILTIN_TASK else CollectionSource.THIRD_PARTY_APP
-        val features = events.map { featureExtractor.extract(it, source, taskCategory, taskSessionId) }
+        val now = System.currentTimeMillis()
+        val started = listOfNotNull(
+            samples.minOfOrNull { it.wallTimeEstimatedMillis },
+            events.minOfOrNull { it.eventTimeWallMillis }
+        ).minOrNull() ?: now
+        val ended = listOfNotNull(
+            samples.maxOfOrNull { it.wallTimeEstimatedMillis },
+            events.maxOfOrNull { it.eventTimeWallMillis }
+        ).maxOrNull() ?: now
+        val source = if (collectionContext.taskCategory != null) CollectionSource.BUILTIN_TASK else CollectionSource.THIRD_PARTY_APP
+        val features = events.map {
+            featureExtractor.extract(
+                it,
+                source,
+                collectionContext.taskCategory,
+                collectionContext.taskSessionId
+            )
+        }
         return Batch(
             batchId = UUID.randomUUID().toString(),
             deviceId = state.deviceId,
             collectionSource = source,
-            taskCategory = taskCategory,
-            taskSessionId = taskSessionId,
-            taskStartedAtWallMillis = taskStartedAt,
-            taskElapsedSecondsAtBatchEnd = taskStartedAt?.let { ((ended - it) / 1000L).toInt().coerceAtLeast(0) },
+            taskCategory = collectionContext.taskCategory,
+            taskSessionId = collectionContext.taskSessionId,
+            taskStartedAtWallMillis = collectionContext.taskStartedAt,
+            taskElapsedSecondsAtBatchEnd = collectionContext.taskStartedAt?.let { ((ended - it) / 1000L).toInt().coerceAtLeast(0) },
             startedAtWallMillis = started,
             endedAtWallMillis = ended,
-            baseElapsedNanos = sensorCollector.currentBaseElapsedNanos(),
+            baseElapsedNanos = collectionContext.baseElapsedNanos,
             sensorSamples = samples,
             contextEvents = events,
             contextFeatures = features,
             skipEvents = emptyList(),
-            gatedResume = gatedResume
+            gatedResume = collectionContext.gatedResume
         )
     }
 

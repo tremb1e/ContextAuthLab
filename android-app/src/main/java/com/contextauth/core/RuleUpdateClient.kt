@@ -6,6 +6,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import java.security.MessageDigest
 
 data class RuleCheckResult(
     val version: String,
@@ -25,7 +26,11 @@ class RuleUpdateClient(private val client: OkHttpClient) {
                 val body = response.body?.string() ?: error("empty rules response")
                 if (!response.isSuccessful) error("HTTP ${response.code}")
                 val parsed = parseRulesResponse(body)
-                parsed.copy(message = "HTTP ${response.code}, rules version ${parsed.version}, ${parsed.policy.patternRules.size} dynamic rules")
+                parsed.copy(
+                    message = "HTTP ${response.code}, rules version ${parsed.version}, " +
+                        "${parsed.policy.patternRules.size} dynamic rules, " +
+                        "${parsed.policy.packageBlocklist.size} package skips"
+                )
             }
         }
     }
@@ -36,14 +41,37 @@ class RuleUpdateClient(private val client: OkHttpClient) {
             val version = json.getString("version")
             val ruleHash = json.getString("rule_hash")
             require(ruleHash.matches(Regex("^[a-f0-9]{64}$"))) { "invalid rule_hash" }
+            require(canonicalRuleHash(json) == ruleHash) { "rule_hash_mismatch" }
             val policy = RedactionPolicy(
                 version = version,
                 ruleHash = ruleHash,
                 packageBlocklist = json.optJSONArray("package_blocklist").toStringList(),
                 maxTextLength = json.optInt("max_text_length", 128).coerceIn(1, 4096),
+                defaultTextAction = json.optString("default_text_action", "REDACT").ifBlank { "REDACT" },
                 patternRules = json.optJSONArray("rules").toPatternRules()
             )
             return RuleCheckResult(version, ruleHash, "rules version $version", policy)
+        }
+
+        fun canonicalRuleHash(json: JSONObject): String {
+            val copy = JSONObject(json.toString())
+            copy.remove("rule_hash")
+            val canonical = canonicalJson(copy)
+            val digest = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray(Charsets.UTF_8))
+            return digest.joinToString("") { "%02x".format(it) }
+        }
+
+        private fun canonicalJson(value: Any?): String = when (value) {
+            null, JSONObject.NULL -> "null"
+            is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(prefix = "{", postfix = "}") { key ->
+                JSONObject.quote(key) + ":" + canonicalJson(value.get(key))
+            }
+            is JSONArray -> (0 until value.length()).joinToString(prefix = "[", postfix = "]") { index ->
+                canonicalJson(value.get(index))
+            }
+            is String -> JSONObject.quote(value)
+            is Number, is Boolean -> value.toString()
+            else -> JSONObject.quote(value.toString())
         }
 
         private fun JSONArray?.toStringList(): List<String> {
@@ -65,6 +93,7 @@ class RuleUpdateClient(private val client: OkHttpClient) {
                     if (pattern.isBlank()) continue
                     val action = obj.optString("action", "REDACT").uppercase()
                     if (action == "ALLOW") continue
+                    val target = obj.optString("target", "text").ifBlank { "text" }
                     val replacement = when (action) {
                         "DROP" -> "<DROPPED>"
                         else -> obj.optString("replacement", "<REDACTED>")
@@ -76,7 +105,8 @@ class RuleUpdateClient(private val client: OkHttpClient) {
                         RedactionPatternRule(
                             name = name.replace(Regex("""[^\w.-]"""), "_").take(48),
                             pattern = pattern,
-                            replacement = replacement
+                            replacement = replacement,
+                            target = target
                         )
                     )
                 }

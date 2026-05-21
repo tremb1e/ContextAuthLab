@@ -9,14 +9,21 @@ import android.os.SystemClock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlin.math.roundToInt
 
 data class SensorRuntimeMetrics(
     val accelerometerHz: Double = 0.0,
     val gyroscopeHz: Double = 0.0,
     val magnetometerHz: Double = 0.0,
+    val accelerometerCollectionHz: Double = 0.0,
+    val gyroscopeCollectionHz: Double = 0.0,
+    val magnetometerCollectionHz: Double = 0.0,
     val accelerometerAvailable: Boolean = false,
     val gyroscopeAvailable: Boolean = false,
     val magnetometerAvailable: Boolean = false,
+    val accelerometerLostSamples: Int = 0,
+    val gyroscopeLostSamples: Int = 0,
+    val magnetometerLostSamples: Int = 0,
     val totalSamples: Int = 0
 )
 
@@ -24,8 +31,16 @@ class SensorCollector(context: Context) : SensorEventListener {
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val buffer = ArrayList<SensorSample>(SamplingConfig.SAMPLING_RATE_HZ * 10)
     private val timestamps = mutableMapOf<String, ArrayDeque<Long>>()
+    private val collectionHzBySensorType = mapOf(
+        "ACCELEROMETER" to collectionHz(Sensor.TYPE_ACCELEROMETER),
+        "GYROSCOPE" to collectionHz(Sensor.TYPE_GYROSCOPE),
+        "MAGNETIC_FIELD" to collectionHz(Sensor.TYPE_MAGNETIC_FIELD)
+    )
     private val mutableMetrics = MutableStateFlow(
         SensorRuntimeMetrics(
+            accelerometerCollectionHz = collectionHzBySensorType.getValue("ACCELEROMETER"),
+            gyroscopeCollectionHz = collectionHzBySensorType.getValue("GYROSCOPE"),
+            magnetometerCollectionHz = collectionHzBySensorType.getValue("MAGNETIC_FIELD"),
             accelerometerAvailable = hasSensor(Sensor.TYPE_ACCELEROMETER),
             gyroscopeAvailable = hasSensor(Sensor.TYPE_GYROSCOPE),
             magnetometerAvailable = hasSensor(Sensor.TYPE_MAGNETIC_FIELD)
@@ -41,6 +56,8 @@ class SensorCollector(context: Context) : SensorEventListener {
     fun start(serverOffsetMillis: Long) {
         if (running) return
         running = true
+        synchronized(timestamps) { timestamps.clear() }
+        resetMeasuredMetrics()
         baseElapsedNanos = SystemClock.elapsedRealtimeNanos()
         baseWallMillis = System.currentTimeMillis() + serverOffsetMillis
         register(Sensor.TYPE_ACCELEROMETER)
@@ -53,6 +70,8 @@ class SensorCollector(context: Context) : SensorEventListener {
             sensorManager.unregisterListener(this)
         }
         running = false
+        synchronized(timestamps) { timestamps.clear() }
+        resetMeasuredMetrics()
         return drain()
     }
 
@@ -101,19 +120,59 @@ class SensorCollector(context: Context) : SensorEventListener {
 
     private fun hasSensor(type: Int): Boolean = sensorManager.getDefaultSensor(type) != null
 
+    private fun collectionHz(type: Int): Double {
+        val sensor = sensorManager.getDefaultSensor(type) ?: return 0.0
+        val sensorMaxHz = if (sensor.minDelay > 0) {
+            1_000_000.0 / sensor.minDelay.toDouble()
+        } else {
+            SamplingConfig.SAMPLING_RATE_HZ.toDouble()
+        }
+        return minOf(SamplingConfig.SAMPLING_RATE_HZ.toDouble(), sensorMaxHz).coerceAtLeast(0.0)
+    }
+
     private fun recordSample(type: String, wallMillis: Long) {
-        val queue = timestamps.getOrPut(type) { ArrayDeque() }
-        queue.addLast(wallMillis)
-        val cutoff = wallMillis - 10_000
-        while (queue.isNotEmpty() && queue.first() < cutoff) queue.removeFirst()
+        synchronized(timestamps) {
+            val queue = timestamps.getOrPut(type) { ArrayDeque() }
+            queue.addLast(wallMillis)
+            val cutoff = wallMillis - 10_000
+            while (queue.isNotEmpty() && queue.first() < cutoff) queue.removeFirst()
+        }
         val current = mutableMetrics.value
         mutableMetrics.value = current.copy(
             accelerometerHz = hz("ACCELEROMETER"),
             gyroscopeHz = hz("GYROSCOPE"),
             magnetometerHz = hz("MAGNETIC_FIELD"),
+            accelerometerLostSamples = lostSamples("ACCELEROMETER"),
+            gyroscopeLostSamples = lostSamples("GYROSCOPE"),
+            magnetometerLostSamples = lostSamples("MAGNETIC_FIELD"),
             totalSamples = current.totalSamples + 1
         )
     }
 
-    private fun hz(type: String): Double = (timestamps[type]?.size ?: 0) / 10.0
+    private fun hz(type: String): Double = synchronized(timestamps) {
+        (timestamps[type]?.size ?: 0) / 10.0
+    }
+
+    private fun lostSamples(type: String): Int = synchronized(timestamps) {
+        val queue = timestamps[type] ?: return@synchronized 0
+        if (queue.size < 2) return@synchronized 0
+        val expectedHz = collectionHzBySensorType[type] ?: 0.0
+        if (expectedHz <= 0.0) return@synchronized 0
+        val durationMillis = (queue.last() - queue.first()).coerceAtLeast(0L)
+        if (durationMillis <= 0L) return@synchronized 0
+        val expectedSamples = ((durationMillis / 1000.0) * expectedHz).roundToInt() + 1
+        (expectedSamples - queue.size).coerceAtLeast(0)
+    }
+
+    private fun resetMeasuredMetrics() {
+        val current = mutableMetrics.value
+        mutableMetrics.value = current.copy(
+            accelerometerHz = 0.0,
+            gyroscopeHz = 0.0,
+            magnetometerHz = 0.0,
+            accelerometerLostSamples = 0,
+            gyroscopeLostSamples = 0,
+            magnetometerLostSamples = 0
+        )
+    }
 }

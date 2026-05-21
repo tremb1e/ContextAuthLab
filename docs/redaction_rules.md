@@ -13,17 +13,18 @@ Default client-side safety logic:
 - Token-like long random/base64/hex strings: `<TOKEN>`.
 - Over-length text: `<LONG_TEXT_DROPPED>`.
 - Sensitive packages such as dialer, contacts, SMS, banking, payment, medical, password manager, and private messaging: skip event.
+- Ordinary visible UI text that does not match a specific placeholder rule: `<TEXT_REDACTED>`.
 
-The current server rule payload intentionally ships no additional frontend UI redaction rules: `rules` and `package_blocklist` are empty. The client keeps the local safety logic above, and the cloud rule fetch path remains available for future study revisions.
+The current server rule payload ships schema-backed default frontend UI redaction rules and a package blocklist. These rules mirror the built-in baseline so clients can refresh policy and rule lineage from `/api/v1/rules` without weakening on-device safety.
 
-The empty remote payload still carries explicit policy metadata:
+The remote payload carries explicit policy metadata:
 
 - `max_text_length`: `128`.
 - `default_text_action`: `REDACT`.
 - `rule_hash`: SHA-256 over the rule payload excluding `rule_hash`.
-- `rules`: empty list for future structured UI text/content-description/node rules.
-- `package_blocklist`: empty list for future package-name block entries.
+- `rules`: default text rules for email, China mobile number, URL, China ID-like number, payment-card-like number, token-like strings, and long numbers.
+- `package_blocklist`: default package-name fragments for dialer, contacts, SMS, banking, payment, medical, password manager, and private messaging apps.
 
-Server does not rely on server-side redaction as primary protection. It quarantines batches that still contain obvious fixed-format sensitive strings.
+Server does not rely on server-side redaction as primary protection. It quarantines batches that still contain obvious fixed-format sensitive strings or prose inside fields named `text_redacted`, `content_desc_redacted`, or `window_title_redacted`.
 
-Server also rejects batches that claim raw Accessibility/UI fields instead of the redacted/hash fields expected by the schema. Exact raw field keys such as `text`, `contentDescription`, `content_description`, `package_name`, `view_id`, and `window_title` are quarantined before storage. Batches must report `diagnostics.redaction_applied: true`.
+Server also rejects batches that claim raw Accessibility/UI fields instead of the redacted/hash fields expected by the schema. Exact raw field keys such as `text`, `contentDescription`, `content_description`, `package_name`, `view_id`, `viewIdResourceName`, and `window_title` are quarantined before storage. Batches must report `diagnostics.redaction_applied: true`.

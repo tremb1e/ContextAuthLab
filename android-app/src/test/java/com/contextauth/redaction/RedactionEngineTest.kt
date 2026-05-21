@@ -24,7 +24,7 @@ class RedactionEngineTest {
         )
         assertFalse(redacted!!.contains("user@example.com"))
         assertFalse(redacted.contains("13800138000"))
-        assertFalse(redacted.contains("https://example.com"))
+        assertFalse(redacted.contains("https://e.co"))
         assertTrue(redacted.contains("<EMAIL>"))
         assertTrue(redacted.contains("<PHONE>"))
         assertTrue(redacted.contains("<URL>"))
@@ -90,8 +90,8 @@ class RedactionEngineTest {
         assertEquals(sha256Hex("com.example.notes:id/account_email"), node.viewIdHash)
         assertFalse(node.packageNameHash!!.contains("com.example"))
         assertFalse(node.viewIdHash!!.contains("account_email"))
-        assertEquals("Contact <EMAIL>", node.textRedacted)
-        assertEquals("Call <PHONE>", node.contentDescRedacted)
+        assertEquals("<TEXT_REDACTED> <EMAIL>", node.textRedacted)
+        assertEquals("<TEXT_REDACTED> <PHONE>", node.contentDescRedacted)
     }
 
     @Test
@@ -132,9 +132,10 @@ class RedactionEngineTest {
 
         val redacted = dynamic.redactText("TICKET-42 user@example.com 13800138000", summary)!!
 
-        assertTrue(redacted.contains("TICKET-42"))
+        assertFalse(redacted.contains("TICKET-42"))
         assertFalse(redacted.contains("user@example.com"))
         assertFalse(redacted.contains("13800138000"))
+        assertTrue(redacted.contains("<TEXT_REDACTED>"))
         assertTrue(redacted.contains("<EMAIL>"))
         assertTrue(redacted.contains("<PHONE>"))
         assertTrue(summary.dynamicRuleHits.isEmpty())
@@ -150,5 +151,27 @@ class RedactionEngineTest {
 
         val redacted = dynamic.redactText("TICKET-42 user@example.com", RedactionSummary())
         assertEquals("<TICKET> <EMAIL>", redacted)
+    }
+
+    @Test
+    fun packageNameRulesDoNotRewriteUiText() {
+        val dynamic = RedactionEngine {
+            RedactionPolicy(
+                packageBlocklist = listOf("privatechat"),
+                patternRules = listOf(RedactionPatternRule("package", "example", "<PKG>", "package_name"))
+            )
+        }
+
+        assertTrue(dynamic.shouldSkipPackage("com.example.privatechat"))
+        assertEquals("<TEXT_REDACTED>", dynamic.redactText("example label", RedactionSummary()))
+    }
+
+    @Test
+    fun ordinaryUiTextIsNotPreservedByDefault() {
+        val summary = RedactionSummary()
+        val redacted = engine.redactText("Alice says hello", summary)
+
+        assertEquals("<TEXT_REDACTED>", redacted)
+        assertEquals(1, summary.redactedPlainText)
     }
 }

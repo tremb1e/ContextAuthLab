@@ -48,6 +48,17 @@ class UiRedactionRule(BaseModel):
     replacement: str | None = None
     description: str | None = None
 
+    @model_validator(mode="after")
+    def validate_rule_contract(self) -> "UiRedactionRule":
+        if self.action in {"REDACT", "DROP"} and not self.pattern:
+            raise ValueError("redaction_rule_requires_pattern")
+        if self.pattern:
+            try:
+                re.compile(self.pattern)
+            except re.error as exc:
+                raise ValueError("invalid_redaction_rule_pattern") from exc
+        return self
+
 
 class RulesResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")

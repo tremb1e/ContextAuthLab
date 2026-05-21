@@ -58,7 +58,7 @@ class ResearchAccessibilityService : AccessibilityService() {
                 eventType = eventType,
                 eventTimeWallMillis = System.currentTimeMillis(),
                 packageNameHash = packageName?.let(::sha256Hex),
-                windowTitleRedacted = redactionEngine.redactText(event.text?.joinToString(" ")),
+                windowTitleRedacted = redactedEventText(event, summary),
                 rootNodes = roots.take(MAX_NODES_PER_EVENT),
                 redactionSummary = summary.asMap()
             )
@@ -134,6 +134,14 @@ class ResearchAccessibilityService : AccessibilityService() {
         if (node.isScrollable) add("SCROLL")
         if (node.isCheckable) add("CHECK")
         if (node.isEditable) add("EDIT")
+    }
+
+    private fun redactedEventText(event: AccessibilityEvent, summary: RedactionSummary): String? {
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
+            if (!event.text.isNullOrEmpty()) summary.droppedEditableTexts += 1
+            return "<EDITABLE_TEXT_DROPPED>"
+        }
+        return redactionEngine.redactText(event.text?.joinToString(" "), summary)
     }
 
     private fun shouldProcess(type: Int): Boolean {

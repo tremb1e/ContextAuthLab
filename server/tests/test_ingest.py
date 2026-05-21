@@ -122,6 +122,13 @@ def test_quarantine_when_card_number_detected(server_client) -> None:
     assert response.json()["detail"] == "unredacted_card"
 
 
+def test_quarantine_when_redacted_ui_field_contains_plain_text(server_client) -> None:
+    batch = sample_batch(text_redacted="Alice hello")
+    response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
+    assert response.status_code == 400
+    assert response.json()["detail"] == "unredacted_ui_text:text_redacted"
+
+
 def test_quarantine_when_raw_accessibility_text_field_detected(server_client) -> None:
     batch = sample_batch()
     batch["context_events"][0]["root_nodes"][0]["text"] = "visible UI label"
@@ -131,6 +138,14 @@ def test_quarantine_when_raw_accessibility_text_field_detected(server_client) ->
     quarantine = _data_dir(server_client) / "quarantine" / DEVICE_ID / "2024-03-09" / f"{batch['batch_id']}.json"
     assert quarantine.exists()
     assert "visible UI label" not in quarantine.read_text(encoding="utf-8")
+
+
+def test_quarantine_when_raw_view_id_resource_name_detected(server_client) -> None:
+    batch = sample_batch()
+    batch["context_events"][0]["root_nodes"][0]["viewIdResourceName"] = "com.example:id/private"
+    response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
+    assert response.status_code == 400
+    assert response.json()["detail"] == "raw_accessibility_field:viewIdResourceName"
 
 
 def test_schema_rejects_batches_without_redaction_applied(server_client) -> None:

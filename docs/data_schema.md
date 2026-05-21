@@ -107,9 +107,9 @@ The decompressed payload is UTF-8 JSON:
 
 Context events contain event metadata, redaction summary, and `root_nodes`. Node snapshots contain allowed structural fields only: class, hashed package/view id, bounds grid, booleans such as clickable/editable/scrollable, child count, redacted text placeholders, action summary, and depth.
 
-Editable node text is replaced with `<EDITABLE_TEXT_DROPPED>` before serialization. Password nodes are omitted entirely. Package and view identifiers are SHA-256 hashes. Dynamic rules from `/api/v1/rules` may add pattern replacements or package skips; the current server payload intentionally contains no extra dynamic rules.
+Editable node text is replaced with `<EDITABLE_TEXT_DROPPED>` before serialization. Password nodes are omitted entirely. Package and view identifiers are SHA-256 hashes. Ordinary visible UI text is replaced with `<TEXT_REDACTED>` unless it has already been converted to a specific placeholder such as `<EMAIL>`, `<PHONE>`, `<URL>`, `<CARD>`, `<ID_NUM>`, `<TOKEN>`, or `<NUM>`. Dynamic rules from `/api/v1/rules` provide pattern replacements and package skips; the current server payload contains non-empty default rules.
 
-Server ingest treats raw Accessibility/UI field keys as invalid payload shape. Keys such as `text`, `contentDescription`, `content_description`, `package_name`, `view_id`, and `window_title` are quarantined with `raw_accessibility_field:<field>`. Valid batches must include `diagnostics.redaction_applied: true`; a false or missing value fails schema validation.
+Server ingest treats raw Accessibility/UI field keys as invalid payload shape. Keys such as `text`, `contentDescription`, `content_description`, `package_name`, `view_id`, `viewIdResourceName`, and `window_title` are quarantined with `raw_accessibility_field:<field>`. Redacted content fields containing prose are quarantined with `unredacted_ui_text:<field>`. Valid batches must include `diagnostics.redaction_applied: true`; a false or missing value fails schema validation.
 
 ## Context Feature
 
@@ -117,15 +117,16 @@ Features include counts and heuristic scores such as `editable_count`, `scrollab
 
 ## Redaction Rule
 
-`GET /api/v1/rules` is schema-backed even when the current remote UI rule list is
-empty. `rule_hash` is computed over the payload excluding `rule_hash`.
+`GET /api/v1/rules` is schema-backed and returns default redaction rules plus a
+package blocklist. `rule_hash` is computed over the payload excluding
+`rule_hash`.
 
 ```json
 {
   "version": "1",
-  "updated_at": "2026-05-18T00:00:00Z",
-  "rules": [],
-  "package_blocklist": [],
+  "updated_at": "2026-05-21T00:00:00Z",
+  "rules": [{"id": "email", "target": "text", "action": "REDACT", "pattern": "...", "replacement": "<EMAIL>"}],
+  "package_blocklist": ["dialer", "contacts", "sms", "bank", "pay"],
   "max_text_length": 128,
   "default_text_action": "REDACT",
   "rule_hash": "sha256-hex"

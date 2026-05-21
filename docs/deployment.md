@@ -84,6 +84,11 @@ The Android app syncs on resume and then every 60 seconds. It first tries the Ch
 
 The app uses these NTP hosts internally only. Home and Diagnostics display generic ClockSync sources such as `NTP synced` or `Server time fallback`; they do not display individual NTP server addresses.
 
+Release builds disable cleartext traffic and trust only system certificate
+authorities through the main network security config. Debug builds keep
+cleartext and user CA trust enabled for emulator/lab endpoints such as
+`http://10.0.2.2:8000`.
+
 ## Android APK
 
 Debug APK build:

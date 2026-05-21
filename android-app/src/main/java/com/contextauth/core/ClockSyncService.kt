@@ -73,7 +73,6 @@ class ClockSyncService(
             val json = JSONObject(body)
             val serverTime = json.getLong("serverTimeMillis")
             settingsStore.setServerStudySalt(json.optString("serverStudySalt", SERVER_STUDY_SALT))
-            settingsStore.setRule(json.optString("rulesVersion", "1"), settingsStore.settings.value.ruleHash)
             val ntpServers = buildList {
                 val timeSync = json.optJSONObject("timeSync")
                 val array = timeSync?.optJSONArray("recommendedNtpServers") ?: json.optJSONArray("ntpServers")

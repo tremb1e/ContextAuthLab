@@ -9,6 +9,12 @@ import java.util.Base64
 object JsonCodec {
     const val ALGORITHM = "LZ4_FRAME+JSON"
 
+    data class EnvelopeBuildResult(
+        val envelope: PayloadEnvelope,
+        val serializeCompressMillis: Long,
+        val shaMillis: Long
+    )
+
     fun batchToJson(batch: Batch, ruleVersion: String, ruleHash: String): String = jsonObject(
         "batch_id" to batch.batchId,
         "device_id" to batch.deviceId,
@@ -26,7 +32,7 @@ object JsonCodec {
         "task_session_id" to batch.taskSessionId,
         "task_started_at_wall_millis" to batch.taskStartedAtWallMillis,
         "task_elapsed_seconds_at_batch_end" to batch.taskElapsedSecondsAtBatchEnd,
-        "app_version" to "1.0.0",
+        "app_version" to BuildConfig.VERSION_NAME,
         "rule_version" to ruleVersion,
         "rule_hash" to ruleHash,
         "consent_version" to "1",
@@ -48,19 +54,33 @@ object JsonCodec {
         )
     )
 
-    fun buildEnvelope(batch: Batch, ruleVersion: String, ruleHash: String): PayloadEnvelope {
+    fun buildEnvelope(batch: Batch, ruleVersion: String, ruleHash: String): PayloadEnvelope =
+        buildEnvelopeWithMetrics(batch, ruleVersion, ruleHash).envelope
+
+    fun buildEnvelopeWithMetrics(batch: Batch, ruleVersion: String, ruleHash: String): EnvelopeBuildResult {
+        val serializeStart = System.nanoTime()
         val jsonBytes = batchToJson(batch, ruleVersion, ruleHash).toByteArray(Charsets.UTF_8)
         val compressed = lz4Frame(jsonBytes)
+        val serializeCompressMillis = (System.nanoTime() - serializeStart) / 1_000_000L
+        val shaStart = System.nanoTime()
+        val sha256Hex = sha256Bytes(compressed)
+        val shaMillis = (System.nanoTime() - shaStart) / 1_000_000L
         return PayloadEnvelope(
             algorithm = ALGORITHM,
             payloadBase64 = Base64.getEncoder().encodeToString(compressed),
-            payloadSha256Hex = sha256Bytes(compressed),
+            payloadSha256Hex = sha256Hex,
             deviceId = batch.deviceId,
             batchId = batch.batchId,
             ruleVersion = ruleVersion,
             ruleHash = ruleHash,
             createdAtWallMillis = batch.startedAtWallMillis
-        )
+        ).let { envelope ->
+            EnvelopeBuildResult(
+                envelope = envelope,
+                serializeCompressMillis = serializeCompressMillis,
+                shaMillis = shaMillis
+            )
+        }
     }
 
     fun envelopeToJson(envelope: PayloadEnvelope): String = jsonObject(
@@ -157,12 +177,34 @@ object JsonCodec {
 
     private fun jsonValue(value: Any?): String = when (value) {
         null -> "null"
-        is String -> "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
+        is String -> "\"" + escapeJsonString(value) + "\""
         is Number, is Boolean -> value.toString()
         is Map<*, *> -> value.entries.joinToString(prefix = "{", postfix = "}") { (k, v) ->
             jsonValue(k.toString()) + ":" + jsonValue(v)
         }
         is Iterable<*> -> value.joinToString(prefix = "[", postfix = "]") { jsonValue(it) }
         else -> jsonValue(value.toString())
+    }
+
+    private fun escapeJsonString(value: String): String = buildString(value.length) {
+        value.forEach { char ->
+            when (char) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\b' -> append("\\b")
+                '\u000C' -> append("\\f")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> {
+                    if (char < ' ') {
+                        append("\\u")
+                        append(char.code.toString(16).padStart(4, '0'))
+                    } else {
+                        append(char)
+                    }
+                }
+            }
+        }
     }
 }

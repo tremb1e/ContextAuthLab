@@ -6,14 +6,14 @@ plugins {
 
 android {
     namespace = "com.contextauth"
-    compileSdk = 35 // Support Android 16 (VanillaIceCream)
+    compileSdk = 35 // Android 15 platform APIs
 
     defaultConfig {
         applicationId = "com.contextauth"
         minSdk = 26
-        targetSdk = 35 // Target Android 16 (VanillaIceCream)
+        targetSdk = 35 // Target Android 15
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "GIT_COMMIT", "\"local\""

@@ -37,32 +37,42 @@ NTP hosts and can be overridden with `TIME_SYNC_NTP_SERVERS`:
 ## `GET /api/v1/rules`
 
 Returns the current UI redaction rule payload and `rule_hash`. The current study
-payload intentionally has empty `rules` and `package_blocklist`; clients should
-continue using local safety redaction plus `default_text_action`.
+payload has non-empty default rules and a package blocklist. Clients should
+apply the fetched policy while keeping built-in baseline redaction active as a
+safety fallback.
 
 Current payload:
 
 ```json
 {
   "version": "1",
-  "updated_at": "2026-05-18T00:00:00Z",
-  "rules": [],
-  "package_blocklist": [],
+  "updated_at": "2026-05-21T00:00:00Z",
+  "rules": [
+    {"id": "email", "target": "text", "action": "REDACT", "replacement": "<EMAIL>"},
+    {"id": "phone_cn", "target": "text", "action": "REDACT", "replacement": "<PHONE>"},
+    {"id": "url", "target": "text", "action": "REDACT", "replacement": "<URL>"},
+    {"id": "id_number_cn", "target": "text", "action": "REDACT", "replacement": "<ID_NUM>"},
+    {"id": "payment_card", "target": "text", "action": "REDACT", "replacement": "<CARD>"},
+    {"id": "opaque_token", "target": "text", "action": "REDACT", "replacement": "<TOKEN>"},
+    {"id": "long_number", "target": "text", "action": "REDACT", "replacement": "<NUM>"}
+  ],
+  "package_blocklist": ["dialer", "contacts", "sms", "bank", "pay", "medical", "password", "signal", "telegram", "whatsapp", "wechat"],
   "max_text_length": 128,
   "default_text_action": "REDACT",
-  "rule_hash": "c61b3eddebddd53da56231d76875b5706ade2e0ce724a59d9e4f5dae500e9df8"
+  "rule_hash": "sha256-hex"
 }
 ```
 
 The Android client fetches this endpoint on startup/health success and after
-server URL changes. Empty rules are valid and mean no additional remote
-redaction beyond the built-in on-device baseline.
+server URL changes. Collection is gated until a non-zero `rule_hash` has been
+fetched, and the client verifies that the hash matches the canonical rule
+payload before applying it.
 
 ## `POST /api/v1/ingest`
 
 Accepts LZ4 frame JSON envelope. Valid requests are stored on disk. Invalid hash, invalid algorithm, bad IDs, corrupt LZ4, schema failures, task-label contract failures, and sensitive text findings are rejected or quarantined.
 
-The server expects Accessibility-derived UI values to arrive as redacted or hashed fields only, such as `text_redacted`, `content_desc_redacted`, `window_title_redacted`, `package_name_hash`, and `view_id_hash`. Raw UI field keys such as `text`, `contentDescription`, `content_description`, `package_name`, `view_id`, and `window_title` are quarantined with `raw_accessibility_field:<field>`. Batches with `diagnostics.redaction_applied` other than `true` fail schema validation.
+The server expects Accessibility-derived UI values to arrive as redacted or hashed fields only, such as `text_redacted`, `content_desc_redacted`, `window_title_redacted`, `package_name_hash`, and `view_id_hash`. Raw UI field keys such as `text`, `contentDescription`, `content_description`, `package_name`, `view_id`, `viewIdResourceName`, and `window_title` are quarantined with `raw_accessibility_field:<field>`. Redacted UI content fields must contain placeholders such as `<TEXT_REDACTED>`, `<EMAIL>`, or `<DROPPED>` rather than prose. Batches with `diagnostics.redaction_applied` other than `true` fail schema validation.
 
 ## `GET /metrics`
 

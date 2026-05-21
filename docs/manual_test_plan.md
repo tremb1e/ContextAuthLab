@@ -29,21 +29,23 @@ Already-used app:
 
 1. Verify Home `Collection Status` shows server connection state, latest server health-check time, and latest server response. It must not show NTP host names.
 2. Verify Home also shows server host only, masked device ID, rule version, Accessibility state, battery whitelist, notification permission, sensor availability/rates, and ClockSync state.
-3. Run all 7 built-in tasks for the fixed 30 second duration.
-4. Verify screen off or lock pauses collection and discards partial batch.
-5. Verify airplane mode writes failed envelopes to local queue, then network restoration replays them.
-6. Verify server files under `data/paper/devices/{device_id}/`.
-7. Inspect stored JSON for no raw input text, no password nodes, redaction placeholders, correct `collection_source`, and correct `task_id`, `task_sequence`, `task_name`, `task_intuitive_description`, and `task_category`.
-8. Submit or unit-test a deliberately raw UI field such as `root_nodes[0].text`; server should quarantine it as `raw_accessibility_field:text` without storing the raw payload in quarantine.
-9. Inspect `logs/server.jsonl` for no raw payload, no complete device ID, and no unredacted text.
-10. Confirm `/api/v1/rules` returns an empty `rules` list and empty `package_blocklist`, and Android Diagnostics/Settings show the fetched rule version/hash.
-11. Confirm ClockSync occurs on app resume and then refreshes about every 60 seconds. If UDP/123 is blocked, the source may show a generic server-time fallback; NTP host names should not appear in app UI.
+3. Confirm automatic collection does not start until `/api/v1/rules` has been fetched and the displayed rule hash is non-zero.
+4. Run all 7 built-in tasks for the fixed 30 second duration.
+5. Verify screen off or lock pauses collection, flushes the already-redacted partial batch when data exists, and resumes with the same task context after unlock.
+6. Verify airplane mode writes failed envelopes to local queue, then network restoration replays them.
+7. Verify server files under `data/paper/devices/{device_id}/`.
+8. Inspect stored JSON for no raw input text, no password nodes, redaction placeholders, correct `collection_source`, and correct `task_id`, `task_sequence`, `task_name`, `task_intuitive_description`, and `task_category`.
+9. Submit or unit-test a deliberately raw UI field such as `root_nodes[0].text`; server should quarantine it as `raw_accessibility_field:text` without storing the raw payload in quarantine.
+10. Submit or unit-test prose inside `text_redacted`; server should quarantine it as `unredacted_ui_text:text_redacted`.
+11. Inspect `logs/server.jsonl` for no raw payload, no complete device ID, and no unredacted text.
+12. Confirm `/api/v1/rules` returns non-empty default redaction rules plus a package blocklist, and Android Diagnostics/Settings show the fetched rule version/hash.
+13. Confirm ClockSync occurs on app resume and then refreshes about every 60 seconds. If UDP/123 is blocked, the source may show a generic server-time fallback; NTP host names should not appear in app UI.
 
 ## Built-In Task Checks
 
 1. Open BuiltInTasks and confirm the single-column list shows C0-C6 with neutral copy, a `7/7` progress indicator, and the sitting posture requirement.
 2. Run each task and confirm the detail page repeats the sitting posture requirement.
-3. C0 shows a quiet clock; C1 shows the full study protocol inside a scrollable text box; C2 supports scrolling and expanding cards; C3 accepts mixed Chinese, English, and special-character input; C4 is named Simulated Phone Settings and exposes tabs, slider, radio buttons, switches, checkbox, buttons, chips, and a local note; C5 shows a tilt-controlled maze ball with walls that stop ball motion and a clear exit marker; C6 shows two simultaneous wrist animations with a stable forearm and wrist pivot: left-right fan sweep on the left and forward-back wrist flexion on the right.
+3. C0 shows a quiet clock; C1 shows the full study protocol inside a scrollable text box; C2 supports scrolling and expanding cards; C3 accepts mixed Chinese, English, and special-character input; C4 is named Simulated Phone Settings and exposes tabs, slider, radio buttons, switches, checkbox, buttons, chips, and a local note; C5 shows a tilt-controlled maze ball with walls that stop ball motion and a clear exit marker; C6 shows two responsive wrist animations with a stable forearm and wrist pivot, a fixed face plane, a phone-screen plane, and motion arcs: left-right fan sweep and forward-back wrist flexion.
 4. For each task, tap the shield icon and confirm the privacy text says the task records only sensors and component structure, not original content.
 5. Press power during a task. The countdown should freeze or stop, collection state should become paused, and no incomplete batch should be queued.
 6. In every task's Collection Status card, verify measured sampling includes accelerometer, gyroscope, and magnetic field, plus sensor availability, event count, latest batch, and ClockSync.

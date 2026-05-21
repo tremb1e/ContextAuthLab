@@ -27,7 +27,7 @@ def test_config_endpoint_returns_stable_values_across_calls(server_client) -> No
 
 
 def test_rules_returns_hash_and_redaction_policy(server_client) -> None:
-    from app.rules import rule_hash
+    from app.rules import DEFAULT_PACKAGE_BLOCKLIST, DEFAULT_UI_REDACTION_RULES, rule_hash
 
     response = server_client.get("/api/v1/rules")
     assert response.status_code == 200
@@ -42,13 +42,28 @@ def test_rules_returns_hash_and_redaction_policy(server_client) -> None:
         "rule_hash",
     }
     assert payload["version"] == "1"
-    assert payload["rules"] == []
-    assert payload["package_blocklist"] == []
+    assert payload["rules"] == DEFAULT_UI_REDACTION_RULES
+    assert payload["package_blocklist"] == DEFAULT_PACKAGE_BLOCKLIST
     assert payload["max_text_length"] == 128
     assert payload["default_text_action"] == "REDACT"
     assert len(payload["rule_hash"]) == 64
     hash_payload = {key: value for key, value in payload.items() if key != "rule_hash"}
     assert payload["rule_hash"] == rule_hash(hash_payload)
+
+
+def test_default_rules_are_non_empty_and_schema_backed(server_client) -> None:
+    payload = server_client.get("/api/v1/rules").json()
+
+    assert len(payload["rules"]) >= 5
+    assert payload["package_blocklist"]
+    ids = {rule["id"] for rule in payload["rules"]}
+    assert {"email", "phone_cn", "url", "id_number_cn", "payment_card", "opaque_token", "long_number"} <= ids
+    for rule in payload["rules"]:
+        assert rule["target"] == "text"
+        assert rule["action"] == "REDACT"
+        assert rule["pattern"]
+        assert rule["replacement"].startswith("<")
+        assert rule["replacement"].endswith(">")
 
 
 def test_openapi_documents_config_and_rules_models(server_client) -> None:

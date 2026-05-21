@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Paint
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -33,6 +34,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -100,6 +102,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalContext
@@ -110,6 +114,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.contextauth.core.ClockSyncState
 import com.contextauth.core.CollectionStatus
@@ -121,8 +126,12 @@ import com.contextauth.service.DataCollectionService
 import com.contextauth.ui.theme.ContextAuthLabTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import java.net.URI
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -266,8 +275,8 @@ private fun MainApp(
                     TaskRunnerScreen(
                         state = state,
                         task = task,
+                        canStart = viewModel.canStart(),
                         onStart = { startForeground(); viewModel.startCollection(task) },
-                        onStop = { viewModel.stopCollection(); stopForeground() },
                         onDone = {
                             viewModel.markTaskComplete(task)
                             viewModel.stopCollection()
@@ -433,12 +442,12 @@ private fun HomeScreen(
             InfoRow("ClockSync", clockSyncSummary(state.clock, includeDrift = true))
         }
         CardBlock(l("传感器", "Sensors")) {
-            InfoRow("Accelerometer", "${yesNo(state.accelerometerAvailable)} / ${"%.1f".format(state.accelerometerHz)} Hz")
-            InfoRow("Gyroscope", "${yesNo(state.gyroscopeAvailable)} / ${"%.1f".format(state.gyroscopeHz)} Hz")
-            InfoRow("Magnetic field", "${yesNo(state.magnetometerAvailable)} / ${"%.1f".format(state.magnetometerHz)} Hz")
+            InfoRow("Accelerometer", "${yesNo(state.accelerometerAvailable)} / ${formatHz(state.accelerometerCollectionHz)}")
+            InfoRow("Gyroscope", "${yesNo(state.gyroscopeAvailable)} / ${formatHz(state.gyroscopeCollectionHz)}")
+            InfoRow("Magnetic field", "${yesNo(state.magnetometerAvailable)} / ${formatHz(state.magnetometerCollectionHz)}")
         }
         if (!canStart) {
-            Banner(l("等待权限、服务器连通和 ClockSync 完成后会自动开始采集。", "Collection starts automatically after permissions, server health, and ClockSync are ready."))
+            Banner(l("等待权限、服务器连通、ClockSync 和脱敏规则获取完成后会自动开始采集。", "Collection starts automatically after permissions, server health, ClockSync, and redaction rules are ready."))
             TextButton(onClick = onPermissions) { Text(l("前往权限引导", "Open permission guide")) }
         } else {
             Banner(l("自检已通过，App 会自动保持采集与上传。", "Checks passed. The app keeps collection and upload running automatically."))
@@ -469,7 +478,7 @@ private fun BuiltInTasksScreen(completed: Set<TaskCategory>, onTask: (TaskCatego
                 Text("${completed.size}/$taskCount", fontWeight = FontWeight.SemiBold)
             }
             Column {
-                Text(l("每项固定 30 秒，可随时停止。", "Each task lasts 30 seconds and can be stopped at any time."), style = MaterialTheme.typography.bodyLarge)
+                Text(l("每项进入后自动记录 30 秒，返回会退出本项。", "Each task records automatically for 30 seconds after entry; Back exits the task."), style = MaterialTheme.typography.bodyLarge)
                 Text(TaskCategory.localizedPostureGuide(), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -503,8 +512,8 @@ private fun BuiltInTasksScreen(completed: Set<TaskCategory>, onTask: (TaskCatego
 private fun TaskRunnerScreen(
     state: com.contextauth.core.UiState,
     task: TaskCategory,
+    canStart: Boolean,
     onStart: () -> Unit,
-    onStop: () -> Unit,
     onDone: () -> Unit,
     onBack: () -> Unit,
     snackbar: SnackbarHostState
@@ -513,9 +522,18 @@ private fun TaskRunnerScreen(
     val haptic = LocalHapticFeedback.current
     var seconds by remember(task) { mutableIntStateOf(state.settings.taskSeconds) }
     var running by remember(task) { mutableStateOf(false) }
+    var autoStarted by remember(task) { mutableStateOf(false) }
     var showPrivacy by remember { mutableStateOf(false) }
     DisposableEffect(Unit) {
         onDispose { context.findActivity()?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+    }
+    LaunchedEffect(task, canStart) {
+        if (!autoStarted && canStart) {
+            seconds = state.settings.taskSeconds
+            autoStarted = true
+            running = true
+            onStart()
+        }
     }
     LaunchedEffect(running, task) {
         if (!running) return@LaunchedEffect
@@ -547,28 +565,21 @@ private fun TaskRunnerScreen(
             modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(8.dp))
         )
 	        Text(l("剩余 ${seconds}s", "${seconds}s remaining"), style = MaterialTheme.typography.titleMedium)
+            if (!autoStarted) {
+                Banner(l("等待采集条件满足后将自动开始 30 秒计时。", "The 30-second timer will start automatically when collection requirements are met."))
+            }
 	        TaskContent(task)
 	        CardBlock(l("采集状态", "Collection Status")) {
-	            InfoRow(l("实测采样率", "Measured sampling"), "acc ${"%.1f".format(state.accelerometerHz)} Hz / gyro ${"%.1f".format(state.gyroscopeHz)} Hz / mag ${"%.1f".format(state.magnetometerHz)} Hz")
+	            InfoRow(l("采集目标", "Collection target"), sensorTargetSummary(state))
 	            InfoRow(l("传感器可用", "Sensors available"), "acc ${yesNo(state.accelerometerAvailable)} / gyro ${yesNo(state.gyroscopeAvailable)} / mag ${yesNo(state.magnetometerAvailable)}")
 	            InfoRow(l("已记录事件数", "Recorded events"), state.diagnostics.eventBuckets.values.sum().toString())
 	            InfoRow(l("最近 batch", "Latest batch"), state.diagnostics.lastBatchId)
 	            InfoRow("ClockSync", clockSyncSummary(state.clock, includeDrift = false))
 	        }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(
-                onClick = {
-                    if (!running) {
-                        seconds = state.settings.taskSeconds
-                        running = true
-                        onStart()
-                    }
-                },
-                modifier = Modifier.weight(1f)
-	            ) { Text(if (running) l("进行中", "Running") else l("开始本项", "Start Task")) }
-	            TextButton(onClick = { running = false; onStop() }) { Text(l("暂停", "Pause")) }
-	            TextButton(onClick = { running = false; onDone() }) { Text(l("结束本项", "Finish Task")) }
-	        }
+            AssistChip(
+                onClick = {},
+                label = { Text(if (running) l("自动记录中", "Auto recording") else l("等待自动开始", "Waiting to auto-start")) }
+            )
 	    }
 	    if (showPrivacy) {
 	        AlertDialog(
@@ -805,165 +816,398 @@ private fun TiltMazeGame() {
 private fun WristRotationGuide() {
     val transition = rememberInfiniteTransition(label = "wrist")
     val sideAngle by transition.animateFloat(
-        initialValue = -32f,
-        targetValue = 32f,
+        initialValue = -34f,
+        targetValue = 34f,
         animationSpec = infiniteRepeatable(animation = tween(1700), repeatMode = RepeatMode.Reverse),
         label = "side_angle"
     )
     val flexAngle by transition.animateFloat(
-        initialValue = -30f,
-        targetValue = 18f,
+        initialValue = -26f,
+        targetValue = 26f,
         animationSpec = infiniteRepeatable(animation = tween(1650), repeatMode = RepeatMode.Reverse),
         label = "flex_angle"
     )
-    Text(l("保持前臂稳定，只让手腕带动手机沿扇形摆动。左图左右摇摆，右图前后内收。", "Keep the forearm still and let only the wrist move the phone through a fan-shaped arc. The left panel shows left-right swing; the right panel shows forward-back flexion."))
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        WristMotionPanel(
-            label = l("左右摇摆", "Left-right swing"),
-            hint = l("手腕左右带动手机扫过扇形", "The wrist sweeps the phone left and right"),
-            angle = sideAngle,
-            mode = WristMotionMode.SIDE_TO_SIDE,
-            modifier = Modifier.weight(1f),
-        )
-        WristMotionPanel(
-            label = l("前后内收", "Forward-back flexion"),
-            hint = l("手腕向内收，再回到自然握持", "Flex the wrist inward, then return to a natural grip"),
-            angle = flexAngle,
-            mode = WristMotionMode.FLEXION,
-            modifier = Modifier.weight(1f),
-        )
+    val facePlaneColor = MaterialTheme.colorScheme.tertiary
+    val screenPlaneColor = MaterialTheme.colorScheme.primary
+    val motionColor = MaterialTheme.colorScheme.secondary
+    Text(l("保持前臂稳定，想象脸前有一块固定的人脸平面，手机屏幕是一块会随手腕转动的屏幕平面。动作时让面部始终朝向手机，不要用头部追随手机。", "Keep the forearm still. Imagine a fixed face plane in front of your face and the phone screen as a screen plane that rotates with the wrist. Keep your face oriented toward the phone; do not follow it with your head."))
+    WristGuideLegend(facePlaneColor, screenPlaneColor, motionColor)
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth < 560.dp) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                WristMotionPanel(
+                    label = l("左右摇摆", "Left-right swing"),
+                    hint = l("蓝色屏幕面围绕手腕向左/右扫过，橙色人脸面保持固定。", "The blue screen plane sweeps left/right around the wrist while the orange face plane stays fixed."),
+                    detail = l("面部朝向保持在中线，不要转头追手机。", "Keep face direction on the center line; do not turn your head to follow the phone."),
+                    angle = sideAngle,
+                    mode = WristMotionMode.SIDE_TO_SIDE,
+                    facePlaneColor = facePlaneColor,
+                    screenPlaneColor = screenPlaneColor,
+                    motionColor = motionColor,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                WristMotionPanel(
+                    label = l("前后内收", "Forward-back flexion"),
+                    hint = l("蓝色屏幕面向面部靠近/远离，手腕是转动轴。", "The blue screen plane moves toward/away from the face, with the wrist as the pivot."),
+                    detail = l("只弯曲手腕，前臂和头部尽量不动。", "Flex only the wrist; keep the forearm and head as still as possible."),
+                    angle = flexAngle,
+                    mode = WristMotionMode.FLEXION,
+                    facePlaneColor = facePlaneColor,
+                    screenPlaneColor = screenPlaneColor,
+                    motionColor = motionColor,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                WristMotionPanel(
+                    label = l("左右摇摆", "Left-right swing"),
+                    hint = l("蓝色屏幕面围绕手腕向左/右扫过，橙色人脸面保持固定。", "The blue screen plane sweeps left/right around the wrist while the orange face plane stays fixed."),
+                    detail = l("面部朝向保持在中线，不要转头追手机。", "Keep face direction on the center line; do not turn your head to follow the phone."),
+                    angle = sideAngle,
+                    mode = WristMotionMode.SIDE_TO_SIDE,
+                    facePlaneColor = facePlaneColor,
+                    screenPlaneColor = screenPlaneColor,
+                    motionColor = motionColor,
+                    modifier = Modifier.weight(1f),
+                )
+                WristMotionPanel(
+                    label = l("前后内收", "Forward-back flexion"),
+                    hint = l("蓝色屏幕面向面部靠近/远离，手腕是转动轴。", "The blue screen plane moves toward/away from the face, with the wrist as the pivot."),
+                    detail = l("只弯曲手腕，前臂和头部尽量不动。", "Flex only the wrist; keep the forearm and head as still as possible."),
+                    angle = flexAngle,
+                    mode = WristMotionMode.FLEXION,
+                    facePlaneColor = facePlaneColor,
+                    screenPlaneColor = screenPlaneColor,
+                    motionColor = motionColor,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
     }
 }
 
 private enum class WristMotionMode { SIDE_TO_SIDE, FLEXION }
 
 @Composable
+private fun WristGuideLegend(facePlaneColor: Color, screenPlaneColor: Color, motionColor: Color) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        WristLegendItem(facePlaneColor, l("橙色线：人脸平面与面部朝向固定", "Orange line: fixed face plane and face direction"))
+        WristLegendItem(screenPlaneColor, l("蓝色面：手机屏幕平面随手腕转动", "Blue plane: phone screen plane rotates with the wrist"))
+        WristLegendItem(motionColor, l("绿色弧线：手腕转动方向与范围", "Green arc: wrist rotation direction and range"))
+    }
+}
+
+@Composable
+private fun WristLegendItem(color: Color, text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(
+            Modifier
+                .size(10.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(color)
+        )
+        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+private fun rotatePoint(point: Offset, pivot: Offset, degrees: Float): Offset {
+    val radians = degrees.toDouble() * PI / 180.0
+    val dx = point.x - pivot.x
+    val dy = point.y - pivot.y
+    return Offset(
+        x = pivot.x + (dx * cos(radians) - dy * sin(radians)).toFloat(),
+        y = pivot.y + (dx * sin(radians) + dy * cos(radians)).toFloat()
+    )
+}
+
+@Composable
 private fun WristMotionPanel(
     label: String,
     hint: String,
+    detail: String,
     angle: Float,
     mode: WristMotionMode,
+    facePlaneColor: Color,
+    screenPlaneColor: Color,
+    motionColor: Color,
     modifier: Modifier = Modifier,
 ) {
-    val arcColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
+    val arcColor = motionColor.copy(alpha = 0.30f)
+    val endpointColor = motionColor.copy(alpha = 0.52f)
+    val guideColor = MaterialTheme.colorScheme.secondary
+    val panelSurface = MaterialTheme.colorScheme.surface
+    val canvasBorder = MaterialTheme.colorScheme.outlineVariant
+    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val facePlaneLabel = l("人脸平面", "face plane")
+    val screenPlaneLabel = l("屏幕平面", "screen plane")
+    val faceDirectionLabel = l("面部朝向", "face direction")
     Column(
         modifier
-            .height(236.dp)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
             .padding(10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(label, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
-        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Text(l("脸部朝向手机屏幕，头部不跟随摆动", "Face the phone screen; do not follow the swing with your head"), style = MaterialTheme.typography.bodySmall, color = guideColor, textAlign = TextAlign.Center)
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             Canvas(
                 Modifier
-                    .size(width = 148.dp, height = 164.dp)
+                    .fillMaxWidth()
+                    .height(212.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .border(1.dp, canvasBorder, RoundedCornerShape(14.dp))
             ) {
+                val minSide = minOf(size.width, size.height)
                 val skin = Color(0xFFE0B38F)
                 val skinDark = Color(0xFFC6906D)
                 val skinLine = Color(0xFFB87858)
                 val phone = Color(0xFF1F2937)
-                val phoneScreen = Color(0xFF8DB7E8)
-                val cx = size.width / 2f
-                val wrist = Offset(cx, size.height * 0.76f)
-                val arcRadius = size.minDimension * 0.55f
-                drawArc(
-                    color = arcColor,
-                    startAngle = if (mode == WristMotionMode.SIDE_TO_SIDE) 238f else 248f,
-                    sweepAngle = if (mode == WristMotionMode.SIDE_TO_SIDE) 64f else 48f,
-                    useCenter = false,
-                    topLeft = Offset(wrist.x - arcRadius, wrist.y - arcRadius),
-                    size = Size(arcRadius * 2f, arcRadius * 2f),
-                    style = Stroke(width = 5f)
-                )
+                val phoneScreen = screenPlaneColor.copy(alpha = 0.82f)
+                val hair = Color(0xFF3F2B23)
+                val gaze = guideColor.copy(alpha = 0.70f)
+                val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = labelColor.toArgb()
+                    textSize = 10.sp.toPx()
+                    textAlign = Paint.Align.CENTER
+                }
+
+                fun drawLabel(text: String, x: Float, y: Float, align: Paint.Align = Paint.Align.CENTER) {
+                    labelPaint.textAlign = align
+                    drawContext.canvas.nativeCanvas.drawText(text, x, y, labelPaint)
+                }
+
+                fun drawArrow(color: Color, start: Offset, end: Offset, strokeWidth: Float = 3.5f, headLength: Float = minSide * 0.055f) {
+                    drawLine(color, start, end, strokeWidth = strokeWidth)
+                    val direction = atan2((end.y - start.y).toDouble(), (end.x - start.x).toDouble())
+                    val spread = PI / 7.0
+                    val left = Offset(
+                        x = end.x - (headLength * cos(direction - spread)).toFloat(),
+                        y = end.y - (headLength * sin(direction - spread)).toFloat()
+                    )
+                    val right = Offset(
+                        x = end.x - (headLength * cos(direction + spread)).toFloat(),
+                        y = end.y - (headLength * sin(direction + spread)).toFloat()
+                    )
+                    drawLine(color, end, left, strokeWidth = strokeWidth)
+                    drawLine(color, end, right, strokeWidth = strokeWidth)
+                }
+
+                fun drawFrontFace(center: Offset) {
+                    drawCircle(skin, radius = minSide * 0.105f, center = center)
+                    drawArc(
+                        color = hair,
+                        startAngle = 190f,
+                        sweepAngle = 160f,
+                        useCenter = false,
+                        topLeft = Offset(center.x - minSide * 0.112f, center.y - minSide * 0.105f),
+                        size = Size(minSide * 0.224f, minSide * 0.19f),
+                        style = Stroke(width = minSide * 0.038f)
+                    )
+                    drawCircle(Color(0xFF263238), radius = minSide * 0.013f, center = Offset(center.x - minSide * 0.034f, center.y - minSide * 0.010f))
+                    drawCircle(Color(0xFF263238), radius = minSide * 0.013f, center = Offset(center.x + minSide * 0.034f, center.y - minSide * 0.010f))
+                    drawLine(Color(0xFF8D5B48), Offset(center.x - minSide * 0.035f, center.y + minSide * 0.052f), Offset(center.x + minSide * 0.035f, center.y + minSide * 0.052f), strokeWidth = minSide * 0.010f)
+                }
+
+                fun drawSideFace(center: Offset) {
+                    drawCircle(skin, radius = minSide * 0.108f, center = center)
+                    drawArc(
+                        color = hair,
+                        startAngle = 95f,
+                        sweepAngle = 170f,
+                        useCenter = false,
+                        topLeft = Offset(center.x - minSide * 0.118f, center.y - minSide * 0.108f),
+                        size = Size(minSide * 0.19f, minSide * 0.20f),
+                        style = Stroke(width = minSide * 0.040f)
+                    )
+                    drawCircle(Color(0xFF263238), radius = minSide * 0.013f, center = Offset(center.x + minSide * 0.040f, center.y - minSide * 0.014f))
+                    drawLine(Color(0xFF8D5B48), Offset(center.x + minSide * 0.060f, center.y + minSide * 0.012f), Offset(center.x + minSide * 0.106f, center.y + minSide * 0.028f), strokeWidth = minSide * 0.011f)
+                    drawLine(Color(0xFF8D5B48), Offset(center.x + minSide * 0.030f, center.y + minSide * 0.058f), Offset(center.x + minSide * 0.080f, center.y + minSide * 0.060f), strokeWidth = minSide * 0.010f)
+                }
+
+                fun drawWristAndForearm(wrist: Offset) {
+                    drawRoundRect(
+                        color = skinDark,
+                        topLeft = Offset(wrist.x - minSide * 0.085f, wrist.y - minSide * 0.015f),
+                        size = Size(minSide * 0.17f, size.height - wrist.y + minSide * 0.08f),
+                        cornerRadius = CornerRadius(minSide * 0.09f, minSide * 0.09f)
+                    )
+                    drawCircle(skinLine, radius = minSide * 0.11f, center = wrist)
+                    drawCircle(skin, radius = minSide * 0.088f, center = wrist)
+                }
+
                 drawRoundRect(
-                    color = skinDark,
-                    topLeft = Offset(cx - 17f, wrist.y - 4f),
-                    size = Size(34f, size.height - wrist.y + 20f),
-                    cornerRadius = CornerRadius(18f, 18f)
+                    color = panelSurface.copy(alpha = 0.72f),
+                    topLeft = Offset(0f, 0f),
+                    size = Size(size.width, size.height),
+                    cornerRadius = CornerRadius(24f, 24f)
                 )
-                drawCircle(skinLine, radius = 22f, center = wrist)
-                drawCircle(skin, radius = 18f, center = wrist)
-
-                fun drawFrontGrip(alpha: Float) {
-                    drawRoundRect(
-                        color = skin.copy(alpha = alpha),
-                        topLeft = Offset(cx - 34f, wrist.y - 60f),
-                        size = Size(68f, 68f),
-                        cornerRadius = CornerRadius(22f, 22f)
-                    )
-                    drawRoundRect(
-                        color = phone.copy(alpha = alpha),
-                        topLeft = Offset(cx - 28f, wrist.y - 110f),
-                        size = Size(56f, 104f),
-                        cornerRadius = CornerRadius(12f, 12f)
-                    )
-                    drawRoundRect(
-                        color = phoneScreen.copy(alpha = alpha),
-                        topLeft = Offset(cx - 21f, wrist.y - 99f),
-                        size = Size(42f, 78f),
-                        cornerRadius = CornerRadius(7f, 7f)
-                    )
-                    repeat(4) { index ->
-                        val y = wrist.y - 56f + index * 14f
-                        drawRoundRect(
-                            color = skin.copy(alpha = alpha),
-                            topLeft = Offset(cx + 23f, y),
-                            size = Size(23f, 10f),
-                            cornerRadius = CornerRadius(7f, 7f)
-                        )
-                    }
-                    drawRoundRect(
-                        color = skin.copy(alpha = alpha),
-                        topLeft = Offset(cx - 47f, wrist.y - 28f),
-                        size = Size(25f, 12f),
-                        cornerRadius = CornerRadius(8f, 8f)
-                    )
-                }
-
-                fun drawSideGrip(alpha: Float) {
-                    drawRoundRect(
-                        color = skin.copy(alpha = alpha),
-                        topLeft = Offset(cx - 22f, wrist.y - 62f),
-                        size = Size(44f, 66f),
-                        cornerRadius = CornerRadius(20f, 20f)
-                    )
-                    drawRoundRect(
-                        color = phone.copy(alpha = alpha),
-                        topLeft = Offset(cx + 2f, wrist.y - 118f),
-                        size = Size(28f, 112f),
-                        cornerRadius = CornerRadius(9f, 9f)
-                    )
-                    drawRoundRect(
-                        color = phoneScreen.copy(alpha = alpha),
-                        topLeft = Offset(cx + 8f, wrist.y - 106f),
-                        size = Size(15f, 84f),
-                        cornerRadius = CornerRadius(5f, 5f)
-                    )
-                    drawRoundRect(
-                        color = skin.copy(alpha = alpha),
-                        topLeft = Offset(cx - 34f, wrist.y - 32f),
-                        size = Size(22f, 12f),
-                        cornerRadius = CornerRadius(8f, 8f)
-                    )
-                }
 
                 if (mode == WristMotionMode.SIDE_TO_SIDE) {
-                    listOf(-32f, 32f).forEach { ghostAngle ->
+                    val cx = size.width / 2f
+                    val wrist = Offset(cx, size.height * 0.82f)
+                    val face = Offset(cx, size.height * 0.16f)
+                    val facePlaneY = size.height * 0.31f
+                    val arcRadius = minSide * 0.47f
+                    val baseArcPoint = Offset(cx, wrist.y - arcRadius)
+                    val phoneHeight = minSide * 0.55f
+                    val phoneWidth = minSide * 0.27f
+
+                    drawFrontFace(face)
+                    drawLine(facePlaneColor, Offset(cx - minSide * 0.34f, facePlaneY), Offset(cx + minSide * 0.34f, facePlaneY), strokeWidth = minSide * 0.025f)
+                    drawLabel(facePlaneLabel, cx, facePlaneY - minSide * 0.035f)
+                    drawArrow(gaze, Offset(cx, facePlaneY + minSide * 0.03f), Offset(cx, wrist.y - phoneHeight * 0.78f), strokeWidth = minSide * 0.014f)
+                    drawLabel(faceDirectionLabel, cx + minSide * 0.26f, size.height * 0.47f, Paint.Align.LEFT)
+                    drawArc(
+                        color = arcColor,
+                        startAngle = 236f,
+                        sweepAngle = 68f,
+                        useCenter = false,
+                        topLeft = Offset(wrist.x - arcRadius, wrist.y - arcRadius),
+                        size = Size(arcRadius * 2f, arcRadius * 2f),
+                        style = Stroke(width = minSide * 0.024f)
+                    )
+                    listOf(-34f, 34f).forEach { limit ->
+                        drawCircle(endpointColor, radius = minSide * 0.020f, center = rotatePoint(baseArcPoint, wrist, limit))
+                    }
+                    drawCircle(motionColor, radius = minSide * 0.026f, center = rotatePoint(baseArcPoint, wrist, angle))
+
+                    drawWristAndForearm(wrist)
+
+                    fun drawFrontGrip(alpha: Float) {
+                        drawRoundRect(
+                            color = skin.copy(alpha = alpha),
+                            topLeft = Offset(cx - minSide * 0.17f, wrist.y - minSide * 0.30f),
+                            size = Size(minSide * 0.34f, minSide * 0.34f),
+                            cornerRadius = CornerRadius(minSide * 0.11f, minSide * 0.11f)
+                        )
+                        drawRoundRect(
+                            color = phone.copy(alpha = alpha),
+                            topLeft = Offset(cx - phoneWidth / 2f, wrist.y - phoneHeight - minSide * 0.03f),
+                            size = Size(phoneWidth, phoneHeight),
+                            cornerRadius = CornerRadius(minSide * 0.060f, minSide * 0.060f)
+                        )
+                        drawRoundRect(
+                            color = phoneScreen.copy(alpha = alpha),
+                            topLeft = Offset(cx - phoneWidth * 0.37f, wrist.y - phoneHeight * 0.88f),
+                            size = Size(phoneWidth * 0.74f, phoneHeight * 0.72f),
+                            cornerRadius = CornerRadius(minSide * 0.032f, minSide * 0.032f)
+                        )
+                        drawLine(
+                            color = screenPlaneColor.copy(alpha = alpha),
+                            start = Offset(cx - phoneWidth * 0.37f, wrist.y - phoneHeight * 0.53f),
+                            end = Offset(cx + phoneWidth * 0.37f, wrist.y - phoneHeight * 0.53f),
+                            strokeWidth = minSide * 0.022f
+                        )
+                        repeat(4) { index ->
+                            val y = wrist.y - minSide * 0.28f + index * minSide * 0.070f
+                            drawRoundRect(
+                                color = skin.copy(alpha = alpha),
+                                topLeft = Offset(cx + minSide * 0.115f, y),
+                                size = Size(minSide * 0.115f, minSide * 0.050f),
+                                cornerRadius = CornerRadius(minSide * 0.035f, minSide * 0.035f)
+                            )
+                        }
+                        drawRoundRect(
+                            color = skin.copy(alpha = alpha),
+                            topLeft = Offset(cx - minSide * 0.235f, wrist.y - minSide * 0.14f),
+                            size = Size(minSide * 0.125f, minSide * 0.06f),
+                            cornerRadius = CornerRadius(minSide * 0.04f, minSide * 0.04f)
+                        )
+                    }
+
+                    listOf(-34f, 34f).forEach { ghostAngle ->
                         rotate(ghostAngle, pivot = wrist) { drawFrontGrip(alpha = 0.16f) }
                     }
                     rotate(angle, pivot = wrist) { drawFrontGrip(alpha = 1f) }
+                    val labelAnchor = rotatePoint(Offset(cx + phoneWidth * 0.94f, wrist.y - phoneHeight * 0.58f), wrist, angle)
+                    drawLabel(screenPlaneLabel, labelAnchor.x, labelAnchor.y)
                 } else {
-                    listOf(-30f, 18f).forEach { ghostAngle ->
+                    val wrist = Offset(size.width * 0.68f, size.height * 0.82f)
+                    val face = Offset(size.width * 0.28f, size.height * 0.23f)
+                    val facePlaneX = face.x + minSide * 0.18f
+                    val arcRadius = minSide * 0.43f
+                    val baseArcPoint = Offset(wrist.x, wrist.y - arcRadius)
+                    val phoneHeight = minSide * 0.58f
+                    val phoneWidth = minSide * 0.12f
+                    val phoneFocus = rotatePoint(Offset(wrist.x - phoneWidth * 0.12f, wrist.y - phoneHeight * 0.55f), wrist, angle)
+
+                    drawSideFace(face)
+                    drawLine(facePlaneColor, Offset(facePlaneX, face.y - minSide * 0.18f), Offset(facePlaneX, face.y + minSide * 0.24f), strokeWidth = minSide * 0.025f)
+                    drawLabel(facePlaneLabel, facePlaneX, face.y - minSide * 0.22f)
+                    drawArrow(gaze, Offset(facePlaneX + minSide * 0.028f, face.y + minSide * 0.060f), phoneFocus, strokeWidth = minSide * 0.014f)
+                    drawLabel(faceDirectionLabel, facePlaneX + minSide * 0.105f, face.y + minSide * 0.31f, Paint.Align.LEFT)
+                    drawArc(
+                        color = arcColor,
+                        startAngle = 244f,
+                        sweepAngle = 52f,
+                        useCenter = false,
+                        topLeft = Offset(wrist.x - arcRadius, wrist.y - arcRadius),
+                        size = Size(arcRadius * 2f, arcRadius * 2f),
+                        style = Stroke(width = minSide * 0.024f)
+                    )
+                    listOf(-26f, 26f).forEach { limit ->
+                        drawCircle(endpointColor, radius = minSide * 0.020f, center = rotatePoint(baseArcPoint, wrist, limit))
+                    }
+                    drawCircle(motionColor, radius = minSide * 0.026f, center = rotatePoint(baseArcPoint, wrist, angle))
+
+                    drawWristAndForearm(wrist)
+
+                    fun drawSideGrip(alpha: Float) {
+                        drawRoundRect(
+                            color = skin.copy(alpha = alpha),
+                            topLeft = Offset(wrist.x - minSide * 0.115f, wrist.y - minSide * 0.31f),
+                            size = Size(minSide * 0.23f, minSide * 0.33f),
+                            cornerRadius = CornerRadius(minSide * 0.10f, minSide * 0.10f)
+                        )
+                        drawRoundRect(
+                            color = phone.copy(alpha = alpha),
+                            topLeft = Offset(wrist.x - phoneWidth / 2f, wrist.y - phoneHeight - minSide * 0.035f),
+                            size = Size(phoneWidth, phoneHeight),
+                            cornerRadius = CornerRadius(minSide * 0.048f, minSide * 0.048f)
+                        )
+                        drawRoundRect(
+                            color = phoneScreen.copy(alpha = alpha),
+                            topLeft = Offset(wrist.x - phoneWidth * 0.33f, wrist.y - phoneHeight * 0.88f),
+                            size = Size(phoneWidth * 0.36f, phoneHeight * 0.76f),
+                            cornerRadius = CornerRadius(minSide * 0.020f, minSide * 0.020f)
+                        )
+                        drawLine(
+                            color = screenPlaneColor.copy(alpha = alpha),
+                            start = Offset(wrist.x - phoneWidth * 0.34f, wrist.y - phoneHeight * 0.86f),
+                            end = Offset(wrist.x - phoneWidth * 0.34f, wrist.y - phoneHeight * 0.15f),
+                            strokeWidth = minSide * 0.022f
+                        )
+                        drawRoundRect(
+                            color = skin.copy(alpha = alpha),
+                            topLeft = Offset(wrist.x - minSide * 0.17f, wrist.y - minSide * 0.16f),
+                            size = Size(minSide * 0.11f, minSide * 0.060f),
+                            cornerRadius = CornerRadius(minSide * 0.040f, minSide * 0.040f)
+                        )
+                    }
+
+                    listOf(-26f, 26f).forEach { ghostAngle ->
                         rotate(ghostAngle, pivot = wrist) { drawSideGrip(alpha = 0.16f) }
                     }
                     rotate(angle, pivot = wrist) { drawSideGrip(alpha = 1f) }
+                    val labelAnchor = rotatePoint(Offset(wrist.x + minSide * 0.11f, wrist.y - phoneHeight * 0.55f), wrist, angle)
+                    drawLabel(screenPlaneLabel, labelAnchor.x, labelAnchor.y)
                 }
             }
         }
         Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-        Text(l("摆幅 ${abs(angle).roundToInt()}°", "Swing ${abs(angle).roundToInt()}°"), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+        Text(detail, style = MaterialTheme.typography.bodySmall, color = guideColor, textAlign = TextAlign.Center)
+        Text(l("当前偏转 ${abs(angle).roundToInt()}°", "Current deflection ${abs(angle).roundToInt()}°"), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
     }
 }
 
@@ -977,7 +1221,7 @@ private fun protocolText(): String = l(
 
     3. 不采集内容：App 不执行点击、输入、手势注入或截图；不读取通讯录、短信、通话记录、相册、麦克风、摄像头、精确位置或不可访问的应用私有数据。
 
-    4. 端侧脱敏：输入框原文不会保存或上传；密码节点整棵丢弃；手机号、邮箱、URL、银行卡号、身份证号、长数字串和令牌样式字符串会替换为占位符。服务端可下发额外脱敏规则，当前默认规则列表为空，仅使用内置基线规则。
+    4. 端侧脱敏：输入框原文不会保存或上传；密码节点整棵丢弃；手机号、邮箱、URL、银行卡号、身份证号、长数字串和令牌样式字符串会替换为占位符。服务端会下发可更新的脱敏规则与包名阻断列表；即使远程规则不可用，内置基线规则也会保持生效。
 
     5. 设备标识：研究 device_id 由 ANDROID_ID 与研究 salt 通过 HMAC-SHA256 生成，不使用 IMEI、序列号、MAC 地址等不可重置硬件标识符。
 
@@ -998,7 +1242,7 @@ private fun protocolText(): String = l(
 
     3. Data not collected: The app does not perform clicks, input, gesture injection, or screenshots. It does not read contacts, SMS, call logs, photos, microphone, camera, precise location, or inaccessible private app data.
 
-    4. On-device redaction: Raw input-field text is never stored or uploaded. Password nodes are dropped entirely. Phone numbers, emails, URLs, card numbers, ID numbers, long numeric strings, and token-like strings are replaced with placeholders. The server may provide extra redaction rules; the current default rule list is empty and the built-in baseline rules remain active.
+    4. On-device redaction: Raw input-field text is never stored or uploaded. Password nodes are dropped entirely. Phone numbers, emails, URLs, card numbers, ID numbers, long numeric strings, and token-like strings are replaced with placeholders. The server provides updatable redaction rules and a package blocklist; built-in baseline rules remain active even when remote rules are unavailable.
 
     5. Device identifier: The research device_id is derived from ANDROID_ID and the study salt with HMAC-SHA256. IMEI, serial number, MAC address, and other non-resettable hardware identifiers are not used.
 
@@ -1020,7 +1264,7 @@ private fun SettingsScreen(
 	) {
 	    Page(l("设置", "Settings"), footer = { AboutFooter(onResearcher) }) {
 	        CardBlock(l("采集", "Collection")) {
-	            InfoRow(l("采样率", "Sampling rate"), l("100Hz（固定）", "100Hz (fixed)"))
+	            InfoRow(l("采样率", "Sampling rate"), l("请求 100Hz，按设备上限降级", "Request 100Hz, capped by device support"))
 	            InfoRow(l("batch 时长", "Batch duration"), l("5s（固定）", "5s (fixed)"))
 	            InfoRow(l("单任务时长", "Task duration"), l("30s（固定）", "30s (fixed)"))
 	            SwitchRow(l("仅 Wi-Fi 上传", "Upload on Wi-Fi only"), state.settings.wifiOnly, viewModel::setWifiOnly)
@@ -1070,7 +1314,7 @@ private fun ResearcherSettingsScreen(
 	        OutlinedButton(onClick = {
 	            val path = onExport()
 	            result = l("已导出：$path", "Exported: $path")
-	        }) { Text(l("导出最近 50 条 Diagnostics", "Export latest 50 diagnostics")) }
+	        }) { Text(l("导出 Diagnostics 快照", "Export diagnostics snapshot")) }
 	        InfoRow(l("最近服务端响应", "Latest server response"), displayMessage(state.diagnostics.lastServerMessage))
 	        if (result.isNotBlank()) Text(result)
 	        TextButton(onClick = onBack) { Text(l("返回", "Back")) }
@@ -1106,18 +1350,18 @@ private fun DiagnosticsScreen(state: com.contextauth.core.UiState, onExport: () 
     var exported by remember { mutableStateOf("") }
     Page(l("诊断", "Diagnostics")) {
         CardBlock(l("传感器", "Sensors")) {
-            InfoRow("Accelerometer", l("${"%.1f".format(state.accelerometerHz)} Hz / 丢样估计 ${lostSamples(state.accelerometerHz)}", "${"%.1f".format(state.accelerometerHz)} Hz / estimated lost ${lostSamples(state.accelerometerHz)}"))
-            InfoRow("Gyroscope", l("${"%.1f".format(state.gyroscopeHz)} Hz / 丢样估计 ${lostSamples(state.gyroscopeHz)}", "${"%.1f".format(state.gyroscopeHz)} Hz / estimated lost ${lostSamples(state.gyroscopeHz)}"))
-            InfoRow("Magnetic field", l("${"%.1f".format(state.magnetometerHz)} Hz / 丢样估计 ${lostSamples(state.magnetometerHz)}", "${"%.1f".format(state.magnetometerHz)} Hz / estimated lost ${lostSamples(state.magnetometerHz)}"))
+            InfoRow("Accelerometer", sensorDiagnosticsSummary(state.accelerometerHz, state.accelerometerCollectionHz, state.accelerometerLostSamples))
+            InfoRow("Gyroscope", sensorDiagnosticsSummary(state.gyroscopeHz, state.gyroscopeCollectionHz, state.gyroscopeLostSamples))
+            InfoRow("Magnetic field", sensorDiagnosticsSummary(state.magnetometerHz, state.magnetometerCollectionHz, state.magnetometerLostSamples))
         }
         CardBlock("Accessibility / ScreenGate") {
             InfoRow("AccessibilityService", yesNo(state.diagnostics.accessibilityEnabled))
-            InfoRow(l("每分钟事件计数", "Events per minute"), state.diagnostics.eventBuckets.toString())
+            InfoRow(l("事件类型计数", "Event type counts"), state.diagnostics.eventBuckets.toString())
             InfoRow("ScreenGate", state.status.name.lowercase())
             Text(state.diagnostics.screenGateHistory.joinToString("\n").ifBlank { l("暂无切换历史", "No transition history") })
         }
         CardBlock(l("上传与性能", "Upload and Performance")) {
-            InfoRow(l("最近 100 batch", "Latest 100 batches"), l("成功 ${state.diagnostics.uploadSuccess} / 失败 ${state.diagnostics.uploadFailure} / 重试 ${state.diagnostics.retrying}", "success ${state.diagnostics.uploadSuccess} / failure ${state.diagnostics.uploadFailure} / retry ${state.diagnostics.retrying}"))
+            InfoRow(l("本次运行 batch", "This-run batches"), l("成功 ${state.diagnostics.uploadSuccess} / 失败 ${state.diagnostics.uploadFailure} / 重试 ${state.diagnostics.retrying}", "success ${state.diagnostics.uploadSuccess} / failure ${state.diagnostics.uploadFailure} / retry ${state.diagnostics.retrying}"))
             InfoRow("JSON+LZ4 p50/p95", "${state.diagnostics.serializeCompressP50Ms}/${state.diagnostics.serializeCompressP95Ms} ms")
             InfoRow("sha256 p50/p95", "${state.diagnostics.shaP50Ms}/${state.diagnostics.shaP95Ms} ms")
             InfoRow(l("上传 p50/p95", "Upload p50/p95"), "${state.diagnostics.uploadP50Ms}/${state.diagnostics.uploadP95Ms} ms")
@@ -1282,9 +1526,15 @@ private fun copyText(context: Context, value: String) {
 private fun hostOnly(url: String): String = runCatching { URI(url).host ?: url }.getOrDefault(url)
 private fun maskDeviceId(value: String): String = if (value.length >= 8) "${value.take(8)}****" else value
 private fun yesNo(value: Boolean): String = if (value) l("已完成", "Done") else l("未完成", "Not done")
+private fun formatHz(value: Double): String = "${"%.1f".format(value)} Hz"
+private fun sensorTargetSummary(state: com.contextauth.core.UiState): String =
+    "acc ${formatHz(state.accelerometerCollectionHz)} / gyro ${formatHz(state.gyroscopeCollectionHz)} / mag ${formatHz(state.magnetometerCollectionHz)}"
+private fun sensorDiagnosticsSummary(actualHz: Double, targetHz: Double, lostSamples: Int): String = l(
+    "实测 ${formatHz(actualHz)} / 可采 ${formatHz(targetHz)} / 丢样估计 $lostSamples",
+    "measured ${formatHz(actualHz)} / target ${formatHz(targetHz)} / estimated lost $lostSamples"
+)
 private fun serverConnectionText(reachable: Boolean): String =
     if (reachable) l("服务器已连接", "Server connected") else l("服务器未连接", "Server disconnected")
-private fun lostSamples(hz: Double): Int = (1000 - (hz * 10).toInt()).coerceAtLeast(0)
 private fun isBasicUrl(url: String): Boolean = Regex("""^https?://[^/]+.*""").matches(url)
 private fun sanitizeUrlForDisplay(url: String): String {
     val host = hostOnly(url)

@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from .config import SETTINGS, get_server_study_salt
 from .integrity import decode_base64, verify_sha256
 from .logging_config import configure_logging, ingest_log
-from .rules import find_forbidden_raw_ui_field, find_unredacted_sensitive_text, rules_response
+from .rules import find_forbidden_raw_ui_field, find_unredacted_sensitive_text, find_unredacted_ui_text_field, rules_response
 from .schemas import Batch, ConfigResponse, Envelope, RulesResponse, TimeSyncConfig
 from .storage import STORE, now_ms
 
@@ -236,6 +236,28 @@ async def ingest(request: Request) -> dict[str, Any]:
                 status_code=400,
             )
             raise HTTPException(status_code=400, detail=sensitive_reason)
+
+        ui_text_reason = find_unredacted_ui_text_field(plaintext_obj)
+        if ui_text_reason:
+            STORE.quarantine(envelope, plaintext_obj, ui_text_reason, request_id)
+            INGEST_TOTAL.labels(result="quarantine").inc()
+            INGEST_ERRORS_TOTAL.labels(type=ui_text_reason).inc()
+            ingest_log(
+                "ingest_quarantined",
+                request_id=request_id,
+                device_id=envelope.device_id,
+                batch_id=envelope.batch_id,
+                rule_version=envelope.rule_version,
+                bytes_in=len(compressed_bytes),
+                bytes_decompressed=len(plaintext_bytes),
+                decompress_ms=decompress_ms,
+                schema_ok=True,
+                quarantined=True,
+                reject_reason=ui_text_reason,
+                client_ip=client_ip,
+                status_code=400,
+            )
+            raise HTTPException(status_code=400, detail=ui_text_reason)
 
         try:
             stored = STORE.store(envelope, batch, plaintext_obj, request_id, len(compressed_bytes), len(plaintext_bytes))

@@ -16,7 +16,7 @@ class SettingsStore(context: Context) {
     fun setServerStudySalt(value: String) = update { copy(serverStudySalt = value.ifBlank { SERVER_STUDY_SALT }) }
     fun setBatchSeconds(@Suppress("UNUSED_PARAMETER") value: Int) = update { copy(batchSeconds = FIXED_BATCH_SECONDS) }
     fun setTaskSeconds(@Suppress("UNUSED_PARAMETER") value: Int) = update { copy(taskSeconds = FIXED_TASK_SECONDS) }
-    fun setAllowThirdParty(@Suppress("UNUSED_PARAMETER") value: Boolean) = update { copy(allowThirdParty = true) }
+    fun setAllowThirdParty(value: Boolean) = update { copy(allowThirdParty = value) }
     fun setWifiOnly(value: Boolean) = update { copy(wifiOnly = value) }
     fun setRule(version: String, hash: String) = update { copy(ruleVersion = version, ruleHash = hash) }
 
@@ -44,7 +44,7 @@ class SettingsStore(context: Context) {
         serverOverridden = prefs.getBoolean("server_overridden", false),
         batchSeconds = FIXED_BATCH_SECONDS,
         taskSeconds = FIXED_TASK_SECONDS,
-        allowThirdParty = true,
+        allowThirdParty = prefs.getBoolean("allow_third_party", true),
         wifiOnly = prefs.getBoolean("wifi_only", true),
         ruleVersion = prefs.getString("rule_version", "1") ?: "1",
         ruleHash = prefs.getString("rule_hash", "0".repeat(64)) ?: "0".repeat(64)
