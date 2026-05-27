@@ -13,14 +13,19 @@ RUN pip install --no-cache-dir --no-index --find-links ./vendor/wheels --prefix=
 
 FROM base AS runtime
 
-ENV SERVER_DATA_DIR=/data \
+ENV SERVER_DATA_DIR=/data/paper \
     SERVER_LOG_DIR=/app/logs \
+    SERVER_RULES_FILE=/data/paper/rules.json \
+    SERVER_FIX_PERMISSIONS=true \
+    SERVER_CHOWN_RECURSIVE=true \
+    APP_UID=1000 \
+    APP_GID=1000 \
     RULES_VERSION=1
 
 WORKDIR /app
 RUN groupadd -g 1000 appuser \
     && useradd -u 1000 -g 1000 -m appuser \
-    && mkdir -p /data /app/logs \
+    && mkdir -p /data/paper /app/logs \
     && chown -R appuser:appuser /data /app
 
 COPY --from=builder /install /usr/local
@@ -34,13 +39,16 @@ RUN printf '%s\n' \
 
 COPY app ./app
 COPY main.py ./
-RUN chown -R appuser:appuser /app
+COPY docker-entrypoint.py /usr/local/bin/contextauthlab-entrypoint
+RUN chmod +x /usr/local/bin/contextauthlab-entrypoint \
+    && chown -R appuser:appuser /app
 
-USER appuser
+USER root
 
 EXPOSE 8000
-VOLUME ["/data"]
+VOLUME ["/data/paper"]
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s \
-    CMD curl -fsS http://127.0.0.1:8000/health || exit 1
+    CMD curl -fsS http://127.0.0.1:8000/ready || exit 1
 
-ENTRYPOINT ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+ENTRYPOINT ["contextauthlab-entrypoint"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

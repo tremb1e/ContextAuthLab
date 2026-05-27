@@ -1,6 +1,5 @@
 package com.contextauth.core
 
-import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicReference
 
 data class RawNodeSnapshot(
@@ -18,6 +17,8 @@ data class RawNodeSnapshot(
     val enabled: Boolean,
     val focused: Boolean,
     val selected: Boolean,
+    val visibleToUser: Boolean,
+    val longClickable: Boolean,
     val password: Boolean,
     val childCount: Int,
     val depth: Int,
@@ -56,15 +57,15 @@ data class RedactionPatternRule(
     val name: String,
     val pattern: String,
     val replacement: String,
-    val target: String = "text"
+    val target: String = "text",
+    val action: String = "REDACT"
 ) {
     val regex: Regex? = runCatching { Regex(pattern) }.getOrNull()
 }
 
 data class RedactionPolicy(
-    val version: String = "1",
-    val ruleHash: String = "0".repeat(64),
-    val packageBlocklist: List<String> = emptyList(),
+    val version: String = RuleDefaults.BASELINE_VERSION,
+    val ruleHash: String = RuleDefaults.BASELINE_RULE_HASH,
     val maxTextLength: Int = 128,
     val defaultTextAction: String = "REDACT",
     val patternRules: List<RedactionPatternRule> = emptyList()
@@ -92,25 +93,6 @@ class RedactionEngine(
     private val longNumber = Regex("""(?<!\d)\d{4,}(?!\d)""")
     private val token = Regex("""\b(?:[A-Fa-f0-9]{24,}|[A-Za-z0-9+/=_-]{32,})\b""")
     private val placeholder = Regex("""<[^<>\s]{2,64}>""")
-    private val builtInSensitivePackages = listOf(
-        "dialer",
-        "contacts",
-        "sms",
-        "bank",
-        "pay",
-        "medical",
-        "password",
-        "signal",
-        "telegram",
-        "whatsapp",
-        "wechat"
-    )
-
-    fun shouldSkipPackage(packageName: String?): Boolean {
-        val normalized = packageName?.lowercase() ?: return false
-        val dynamic = policyProvider().packageBlocklist.map { it.lowercase() }
-        return (builtInSensitivePackages + dynamic).any { it.isNotBlank() && normalized.contains(it) }
-    }
 
     fun sanitizeNode(raw: RawNodeSnapshot, summary: RedactionSummary): NodeSnapshot? {
         if (raw.password) {
@@ -121,15 +103,16 @@ class RedactionEngine(
             summary.droppedEditableTexts += 1
             "<EDITABLE_TEXT_DROPPED>"
         } else {
-            redactText(raw.text?.toString(), summary)
+            null
         }
+        val visibleText = if (raw.editable) null else visibleTextForTarget(raw.text?.toString(), summary, "text")
         return NodeSnapshot(
             nodeId = raw.nodeId,
-            packageNameHash = raw.packageName?.let(::sha256Hex),
             className = raw.className,
-            viewIdHash = raw.viewId?.let(::sha256Hex),
+            viewIdResourceName = raw.viewId,
+            text = visibleText,
             textRedacted = textRedacted,
-            contentDescRedacted = redactText(raw.contentDescription?.toString(), summary),
+            contentDescRedacted = redactTextForTarget(raw.contentDescription?.toString(), summary, "content_description"),
             clickable = raw.clickable,
             editable = raw.editable,
             scrollable = raw.scrollable,
@@ -138,6 +121,8 @@ class RedactionEngine(
             enabled = raw.enabled,
             focused = raw.focused,
             selected = raw.selected,
+            visibleToUser = raw.visibleToUser,
+            longClickable = raw.longClickable,
             password = false,
             childCount = raw.childCount,
             depth = raw.depth,
@@ -147,13 +132,23 @@ class RedactionEngine(
     }
 
     fun redactText(value: String?, summary: RedactionSummary = RedactionSummary()): String? {
+        return redactTextForTarget(value, summary, "text")
+    }
+
+    private fun redactTextForTarget(value: String?, summary: RedactionSummary, fieldTarget: String): String? {
         if (value == null) return null
         if (value.isBlank()) return "<EMPTY>"
         val policy = policyProvider()
         var result: String = value
-        policy.patternRules.filter { it.appliesToUiText() }.forEach { rule ->
+        policy.patternRules.filter { it.appliesToTextField(fieldTarget) }.forEach { rule ->
             val regex = rule.regex ?: return@forEach
             val replacement = rule.replacement.ifBlank { "<REDACTED>" }
+            if (rule.action.uppercase() == "DROP" && regex.containsMatchIn(result)) {
+                regex.findAll(result).forEach { _ ->
+                    summary.dynamicRuleHits[rule.name] = (summary.dynamicRuleHits[rule.name] ?: 0) + 1
+                }
+                return "<DROPPED>"
+            }
             result = replace(result, regex, replacement) {
                 summary.dynamicRuleHits[rule.name] = (summary.dynamicRuleHits[rule.name] ?: 0) + 1
             }
@@ -167,7 +162,6 @@ class RedactionEngine(
         result = replace(result, token, "<TOKEN>") { summary.replacedToken += 1 }
         result = replace(result, longNumber, "<NUM>") { summary.replacedNumber += 1 }
         return when (policy.defaultTextAction.uppercase()) {
-            "ALLOW" -> result
             "DROP" -> {
                 summary.redactedPlainText += 1
                 "<DROPPED>"
@@ -176,14 +170,45 @@ class RedactionEngine(
         }
     }
 
+    private fun visibleTextForTarget(value: String?, summary: RedactionSummary, fieldTarget: String): String? {
+        if (value == null) return null
+        if (value.isBlank()) return "<EMPTY>"
+        val policy = policyProvider()
+        var result: String = value
+        policy.patternRules.filter { it.appliesToTextField(fieldTarget) }.forEach { rule ->
+            val regex = rule.regex ?: return@forEach
+            val replacement = rule.replacement.ifBlank { "<REDACTED>" }
+            if (rule.action.uppercase() == "DROP" && regex.containsMatchIn(result)) {
+                regex.findAll(result).forEach { _ ->
+                    summary.dynamicRuleHits[rule.name] = (summary.dynamicRuleHits[rule.name] ?: 0) + 1
+                }
+                return "<DROPPED>"
+            }
+            result = replace(result, regex, replacement) {
+                summary.dynamicRuleHits[rule.name] = (summary.dynamicRuleHits[rule.name] ?: 0) + 1
+            }
+        }
+        if (result.length > policy.maxTextLength.coerceAtLeast(1)) return "<LONG_TEXT_DROPPED>"
+        result = replace(result, idNum, "<ID_NUM>") { summary.replacedIdNumber += 1 }
+        result = replace(result, card, "<CARD>") { summary.replacedCard += 1 }
+        result = replace(result, email, "<EMAIL>") { summary.replacedEmail += 1 }
+        result = replace(result, phone, "<PHONE>") { summary.replacedPhone += 1 }
+        result = replace(result, url, "<URL>") { summary.replacedUrl += 1 }
+        result = replace(result, token, "<TOKEN>") { summary.replacedToken += 1 }
+        result = replace(result, longNumber, "<NUM>") { summary.replacedNumber += 1 }
+        return if (policy.defaultTextAction.uppercase() == "DROP") "<DROPPED>" else result
+    }
+
     private fun replace(input: String, regex: Regex, replacement: String, onHit: () -> Unit): String {
         if (!regex.containsMatchIn(input)) return input
         regex.findAll(input).forEach { _ -> onHit() }
-        return regex.replace(input, replacement)
+        return regex.replace(input) { replacement }
     }
 
-    private fun RedactionPatternRule.appliesToUiText(): Boolean =
-        target.lowercase() in setOf("text", "content_description", "node")
+    private fun RedactionPatternRule.appliesToTextField(fieldTarget: String): Boolean {
+        val normalized = target.lowercase()
+        return normalized == "node" || normalized == fieldTarget
+    }
 
     private fun redactPlainTextSegments(value: String, summary: RedactionSummary): String {
         val tokens = mutableListOf<String>()
@@ -207,9 +232,4 @@ class RedactionEngine(
         if (compact.any { it == "<TEXT_REDACTED>" }) summary.redactedPlainText += 1
         return compact.joinToString(" ")
     }
-}
-
-fun sha256Hex(value: String): String {
-    val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
-    return digest.joinToString("") { "%02x".format(it) }
 }

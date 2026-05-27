@@ -4,7 +4,7 @@
 
 - Docker 20.10 or newer.
 - Docker Compose v2.
-- x86_64 or aarch64 Linux host.
+- x86_64 Linux host for the exported offline image. ARM64 hosts need emulation or an ARM64-specific rebuild/wheelhouse.
 - 2 GB RAM minimum.
 - 50 GB free disk recommended for study data.
 
@@ -15,16 +15,27 @@ git clone <repo>
 cd ContextAuthLab
 cp .env.example .env
 docker compose up -d
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/ready
 ```
 
 Set `SERVER_STUDY_SALT` once and keep it stable. Losing or changing it changes every derived research `device_id`.
 
+The image entrypoint and compose `*-server-init` service both prepare mounted
+data/log directories for the non-root API process (UID/GID `1000:1000` by
+default). This avoids the common bind-mount failure where Docker creates host
+directories as root and the server cannot create `devices`, `index`, or
+`quarantine`.
+
 ## Environment
 
+- `SERVER_BIND`: host bind address, default `127.0.0.1`. Use a reverse proxy for public HTTPS; set `0.0.0.0` only for controlled lab HTTP access.
 - `SERVER_PORT`: host port, default `8000`.
 - `SERVER_STUDY_SALT`: stable study salt. Default for this prototype is `Continuous_Authentication`.
-- `RULES_VERSION`: redaction rules version, default `1`.
+- `SERVER_RULES_FILE`: editable redaction rules JSON path. Defaults to `${SERVER_DATA_DIR}/rules.json` and is materialized from `server/app/default_rules.json` on first start.
+- `SERVER_FIX_PERMISSIONS`: let the container entrypoint create/chown data and log paths before dropping to `appuser`, default `true`.
+- `SERVER_CHOWN_RECURSIVE`: recursively chown mounted data/log paths on startup, default `true`; set to `false` after first boot for very large datasets if ownership is already correct.
+- `SERVER_MIN_FREE_BYTES`: non-negative free-space floor before accepting writes, default `10485760`.
+- `RULES_VERSION`: fallback redaction rules version used when a newly materialized rules file has no version, default `1`.
 - `INGEST_REQUIRE_AUTH`: reserved, default `false`.
 - `TIME_SYNC_REGION`: advisory region in `/api/v1/config`, default `CN`.
 - `TIME_SYNC_NTP_SERVERS`: comma-separated advisory NTP hosts in `/api/v1/config`; defaults to China-region public/cloud hosts.
@@ -32,6 +43,7 @@ Set `SERVER_STUDY_SALT` once and keep it stable. Losing or changing it changes e
 - `TZ`: container timezone.
 - `VERSION`: Docker image tag.
 - `DATA_VOLUME` and `LOG_VOLUME`: production override paths.
+- `SERVER_CONTAINER_UID` and `SERVER_CONTAINER_GID`: numeric UID/GID used by the compose init service and API process, default `1000:1000`.
 
 ## Modes
 
@@ -48,6 +60,35 @@ Build a local server image for deployment:
 ```bash
 docker build -t contextauthlab/server:latest ./server
 docker image inspect contextauthlab/server:latest
+```
+
+Export/import a portable server image:
+
+```bash
+mkdir -p artifacts
+docker save contextauthlab/server:latest -o artifacts/contextauthlab-server-latest.tar
+(cd artifacts && sha256sum contextauthlab-server-latest.tar > contextauthlab-server-latest.tar.sha256)
+
+# On another server:
+docker load -i contextauthlab-server-latest.tar
+docker run --rm contextauthlab/server:latest id
+```
+
+Build both distributable images:
+
+```bash
+make build-images
+docker run --rm contextauthlab/server:latest id
+docker image inspect contextauthlab/android-app-debug:latest --format '{{.Id}}'
+```
+
+The Android image is an APK artifact image, not a runnable mobile runtime. To
+extract the APK from a registry-delivered image:
+
+```bash
+cid=$(docker create contextauthlab/android-app-debug:latest)
+docker cp "$cid":/artifacts/contextauthlab-debug.apk artifacts/contextauthlab-debug.apk
+docker rm "$cid"
 ```
 
 Single-machine background deployment:
@@ -70,8 +111,35 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 docker compose ps
 docker compose logs -f contextauthlab-server
 curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/ready
 docker compose exec contextauthlab-server sh
-docker compose exec contextauthlab-server ls -la /data
+docker compose exec contextauthlab-server sh -c 'id && ls -la /data/paper /app/logs'
+```
+
+If the service fails with `PermissionError: [Errno 13] Permission denied:
+'/data/paper/devices'`, the bind-mounted host directory is not writable by the
+non-root container user. With the provided compose file, restart so the init
+service can repair ownership:
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+For a manual `docker run` deployment, prepare the host directories yourself:
+
+```bash
+mkdir -p /var/lib/contextauthlab/data/paper /var/log/contextauthlab
+chown -R 1000:1000 /var/lib/contextauthlab/data/paper /var/log/contextauthlab
+docker run -d --name contextauthlab-server \
+  -p 127.0.0.1:8000:8000 \
+  -e SERVER_DATA_DIR=/data/paper \
+  -e SERVER_LOG_DIR=/app/logs \
+  -e SERVER_RULES_FILE=/data/paper/rules.json \
+  -e SERVER_STUDY_SALT=Continuous_Authentication \
+  -v /var/lib/contextauthlab/data/paper:/data/paper:rw \
+  -v /var/log/contextauthlab:/app/logs:rw \
+  contextauthlab/server:latest
 ```
 
 ClockSync troubleshooting:
@@ -82,7 +150,7 @@ curl -fsS http://127.0.0.1:8000/api/v1/config
 
 The Android app syncs on resume and then every 60 seconds. It first tries the China-region NTP hosts advertised in `timeSync.recommendedNtpServers`. If UDP/123 is blocked, it falls back to the config response `serverTimeMillis`.
 
-The app uses these NTP hosts internally only. Home and Diagnostics display generic ClockSync sources such as `NTP synced` or `Server time fallback`; they do not display individual NTP server addresses.
+The app uses these NTP hosts internally only. Home and Details display generic ClockSync sources such as `NTP synced` or `Server time fallback`; they do not display individual NTP server addresses.
 
 Release builds disable cleartext traffic and trust only system certificate
 authorities through the main network security config. Debug builds keep
@@ -105,11 +173,39 @@ Install on a test device:
 adb install -r artifacts/contextauthlab-debug.apk
 ```
 
-After installation, enable AccessibilityService, battery optimization exemption, and notification permission. The app starts collection automatically once `/health`, ClockSync, screen/unlock state, and Wi-Fi policy are ready.
+After installation, enable AccessibilityService, battery optimization exemption, and notification permission. The app starts collection automatically once required permissions, a valid research `device_id`, and screen/unlock state are ready. Server reachability, ClockSync, Wi-Fi, and rule refresh failures do not block local sampling; failed uploads are queued and replayed according to the Wi-Fi policy.
 
-For UI verification, switch the device system language between Chinese and English and relaunch the app. Participant-facing screens, task instructions, protocol text, notification copy, settings, diagnostics, and dialogs should follow the system language.
+For UI verification, switch the device system language between Chinese and English and relaunch the app. Participant-facing screens, task instructions, protocol text, notification copy, settings, details, and dialogs should follow the system language.
 
-Home's `Collection Status` card is intentionally about server connectivity. It should show connected/disconnected state, latest health-check time, and latest server response.
+Home's `Collection Status` card shows server connectivity, automatic collection state, latest connectivity-test time, latest upload time, and latest server response. Tapping the server connection chip triggers a fresh `/health` test.
+
+## Redaction Rules File
+
+On startup the server reads `SERVER_RULES_FILE`. If the file does not exist, it
+copies the packaged default payload from `server/app/default_rules.json` into
+that location and then serves it from `/api/v1/rules`. The server computes
+`rule_hash` at response time; do not store `rule_hash` inside the editable file.
+
+Minimal editable file:
+
+```json
+{
+  "version": "1",
+  "updated_at": "2026-05-22T00:00:00Z",
+  "rules": [
+    {"id": "email", "target": "text", "action": "REDACT", "pattern": "...", "replacement": "<EMAIL>"}
+  ],
+  "package_blocklist": [],
+  "max_text_length": 128,
+  "default_text_action": "REDACT"
+}
+```
+
+Restart the container after editing the file. Android treats remote rules as
+advisory text/content redaction extensions: invalid regex entries are skipped,
+package-name targets are ignored, missing/stale rule hashes do not stop
+collection, and built-in baseline redaction remains active. Package-level app
+skipping has been removed, so foreground UI is collected and redacted.
 
 ## Data Backup
 
@@ -196,4 +292,4 @@ server {
 
 ## Security
 
-Do not expose port 8000 directly to the public internet. Put the service behind a firewall and terminate TLS with Caddy or Nginx. The service runs as non-root `appuser` and uses bind-mounted host directories for direct research data access.
+Do not expose port 8000 directly to the public internet. Put the service behind a firewall and terminate TLS with Caddy or Nginx. This prototype does not enforce ingest authentication while `INGEST_REQUIRE_AUTH=false`, so public deployments must rely on firewall/reverse-proxy access control. The service runs as non-root `appuser` and uses bind-mounted host directories for direct research data access.

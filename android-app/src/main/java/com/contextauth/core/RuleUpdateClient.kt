@@ -27,30 +27,41 @@ class RuleUpdateClient(private val client: OkHttpClient) {
                 if (!response.isSuccessful) error("HTTP ${response.code}")
                 val parsed = parseRulesResponse(body)
                 parsed.copy(
-                    message = "HTTP ${response.code}, rules version ${parsed.version}, " +
-                        "${parsed.policy.patternRules.size} dynamic rules, " +
-                        "${parsed.policy.packageBlocklist.size} package skips"
+                    message = "HTTP ${response.code}, ${parsed.message}, " +
+                        "${parsed.policy.patternRules.size} dynamic rules"
                 )
             }
         }
     }
 
     companion object {
+        private val sha256Regex = Regex("^[a-f0-9]{64}$")
+
         fun parseRulesResponse(body: String): RuleCheckResult {
             val json = JSONObject(body)
-            val version = json.getString("version")
-            val ruleHash = json.getString("rule_hash")
-            require(ruleHash.matches(Regex("^[a-f0-9]{64}$"))) { "invalid rule_hash" }
-            require(canonicalRuleHash(json) == ruleHash) { "rule_hash_mismatch" }
+            val version = RuleDefaults.usableVersion(json.optString("version", RuleDefaults.BASELINE_VERSION))
+            val computedHash = runCatching { canonicalRuleHash(json) }.getOrDefault(RuleDefaults.BASELINE_RULE_HASH)
+            val serverHash = json.optString("rule_hash").trim().lowercase()
+            val serverHashUsable = serverHash.matches(sha256Regex) && serverHash != RuleDefaults.ZERO_HASH
+            val ruleHash = if (serverHashUsable && serverHash == computedHash) {
+                serverHash
+            } else {
+                RuleDefaults.usableRuleHash(computedHash)
+            }
+            val hashNote = when {
+                serverHash.isBlank() -> "missing hash ignored"
+                !serverHashUsable -> "invalid hash ignored"
+                serverHash != computedHash -> "hash mismatch ignored"
+                else -> "hash verified"
+            }
             val policy = RedactionPolicy(
                 version = version,
                 ruleHash = ruleHash,
-                packageBlocklist = json.optJSONArray("package_blocklist").toStringList(),
                 maxTextLength = json.optInt("max_text_length", 128).coerceIn(1, 4096),
-                defaultTextAction = json.optString("default_text_action", "REDACT").ifBlank { "REDACT" },
+                defaultTextAction = safeDefaultTextAction(json.optString("default_text_action", "REDACT")),
                 patternRules = json.optJSONArray("rules").toPatternRules()
             )
-            return RuleCheckResult(version, ruleHash, "rules version $version", policy)
+            return RuleCheckResult(version, ruleHash, "rules version $version, $hashNote", policy)
         }
 
         fun canonicalRuleHash(json: JSONObject): String {
@@ -74,16 +85,6 @@ class RuleUpdateClient(private val client: OkHttpClient) {
             else -> JSONObject.quote(value.toString())
         }
 
-        private fun JSONArray?.toStringList(): List<String> {
-            if (this == null) return emptyList()
-            return buildList {
-                for (index in 0 until length()) {
-                    val value = optString(index).trim()
-                    if (value.isNotBlank()) add(value)
-                }
-            }
-        }
-
         private fun JSONArray?.toPatternRules(): List<RedactionPatternRule> {
             if (this == null) return emptyList()
             return buildList {
@@ -91,9 +92,9 @@ class RuleUpdateClient(private val client: OkHttpClient) {
                     val obj = optJSONObject(index) ?: continue
                     val pattern = obj.optString("pattern").trim()
                     if (pattern.isBlank()) continue
-                    val action = obj.optString("action", "REDACT").uppercase()
+                    val action = normalizeRuleAction(obj.optString("action", "REDACT"))
                     if (action == "ALLOW") continue
-                    val target = obj.optString("target", "text").ifBlank { "text" }
+                    val target = normalizeTarget(obj.optString("target", "text")) ?: continue
                     val replacement = when (action) {
                         "DROP" -> "<DROPPED>"
                         else -> obj.optString("replacement", "<REDACTED>")
@@ -101,16 +102,32 @@ class RuleUpdateClient(private val client: OkHttpClient) {
                     val name = obj.optString("name")
                         .ifBlank { obj.optString("id") }
                         .ifBlank { "rule_$index" }
-                    add(
-                        RedactionPatternRule(
-                            name = name.replace(Regex("""[^\w.-]"""), "_").take(48),
-                            pattern = pattern,
-                            replacement = replacement,
-                            target = target
-                        )
+                    val rule = RedactionPatternRule(
+                        name = name.replace(Regex("""[^\w.-]"""), "_").take(48),
+                        pattern = pattern,
+                        replacement = replacement,
+                        target = target,
+                        action = action
                     )
+                    if (rule.regex != null) add(rule)
                 }
             }
+        }
+
+        private fun safeDefaultTextAction(action: String): String =
+            if (action.trim().uppercase() == "DROP") "DROP" else "REDACT"
+
+        private fun normalizeRuleAction(action: String): String = when (action.trim().uppercase()) {
+            "DROP" -> "DROP"
+            "ALLOW" -> "ALLOW"
+            else -> "REDACT"
+        }
+
+        private fun normalizeTarget(target: String): String? = when (target.trim().lowercase()) {
+            "content_description", "contentdescription", "content_desc", "content-description" -> "content_description"
+            "node" -> "node"
+            "package", "package_name", "packagename" -> null
+            else -> "text"
         }
     }
 }

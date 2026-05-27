@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 mkdir -p data/paper logs
-chmod 0777 data/paper logs
+chmod 0777 data/paper logs 2>/dev/null || true
 cp -n .env.example .env >/dev/null 2>&1 || true
 
 docker compose -f docker-compose.yml up -d --build

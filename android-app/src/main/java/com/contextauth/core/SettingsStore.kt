@@ -16,9 +16,13 @@ class SettingsStore(context: Context) {
     fun setServerStudySalt(value: String) = update { copy(serverStudySalt = value.ifBlank { SERVER_STUDY_SALT }) }
     fun setBatchSeconds(@Suppress("UNUSED_PARAMETER") value: Int) = update { copy(batchSeconds = FIXED_BATCH_SECONDS) }
     fun setTaskSeconds(@Suppress("UNUSED_PARAMETER") value: Int) = update { copy(taskSeconds = FIXED_TASK_SECONDS) }
-    fun setAllowThirdParty(value: Boolean) = update { copy(allowThirdParty = value) }
     fun setWifiOnly(value: Boolean) = update { copy(wifiOnly = value) }
-    fun setRule(version: String, hash: String) = update { copy(ruleVersion = version, ruleHash = hash) }
+    fun setRule(version: String, hash: String) = update {
+        copy(
+            ruleVersion = RuleDefaults.usableVersion(version),
+            ruleHash = RuleDefaults.usableRuleHash(hash)
+        )
+    }
 
     private fun update(block: AppSettings.() -> AppSettings) {
         val next = mutableSettings.value.block()
@@ -29,7 +33,6 @@ class SettingsStore(context: Context) {
             .putBoolean("server_overridden", next.serverOverridden)
             .putInt("batch_seconds", next.batchSeconds)
             .putInt("task_seconds", next.taskSeconds)
-            .putBoolean("allow_third_party", next.allowThirdParty)
             .putBoolean("wifi_only", next.wifiOnly)
             .putString("rule_version", next.ruleVersion)
             .putString("rule_hash", next.ruleHash)
@@ -44,10 +47,9 @@ class SettingsStore(context: Context) {
         serverOverridden = prefs.getBoolean("server_overridden", false),
         batchSeconds = FIXED_BATCH_SECONDS,
         taskSeconds = FIXED_TASK_SECONDS,
-        allowThirdParty = prefs.getBoolean("allow_third_party", true),
         wifiOnly = prefs.getBoolean("wifi_only", true),
-        ruleVersion = prefs.getString("rule_version", "1") ?: "1",
-        ruleHash = prefs.getString("rule_hash", "0".repeat(64)) ?: "0".repeat(64)
+        ruleVersion = RuleDefaults.usableVersion(prefs.getString("rule_version", RuleDefaults.BASELINE_VERSION)),
+        ruleHash = RuleDefaults.usableRuleHash(prefs.getString("rule_hash", RuleDefaults.BASELINE_RULE_HASH))
     )
 
     private companion object {

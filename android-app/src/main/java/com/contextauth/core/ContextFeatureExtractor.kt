@@ -22,13 +22,17 @@ class ContextFeatureExtractor {
             editable == 1 && clickable > 2 -> 0.6
             else -> 0.1
         }
-        val gameScore = if (mediaScore > 0.5 && clickable <= 1) 0.4 else 0.1
+        val gameScore = when {
+            taskCategory == TaskCategory.C5 -> 0.8
+            mediaScore > 0.5 && clickable <= 1 -> 0.4
+            else -> 0.1
+        }
         val estimated = when {
             taskCategory != null -> taskCategory.name
             editable >= 2 -> "C4"
-            event.eventType == "TYPE_VIEW_TEXT_CHANGED" || editable == 1 -> "C3"
+            event.inputMethodVisible || event.eventType == "TYPE_VIEW_TEXT_CHANGED" || editable == 1 -> "C3"
             event.eventType == "TYPE_VIEW_SCROLLED" || scrollable > 0 -> "C2"
-            mediaScore > 0.5 -> "C5"
+            mediaScore > 0.5 -> "C6"
             clickable > 4 -> "C4"
             else -> taskCategory?.name ?: "UNKNOWN"
         }
@@ -38,6 +42,7 @@ class ContextFeatureExtractor {
             collectionSource = source,
             taskCategory = taskCategory,
             taskSessionId = taskSessionId,
+            inputMethodVisible = event.inputMethodVisible,
             editableCount = editable,
             scrollableCount = scrollable,
             clickableCount = clickable,
@@ -47,7 +52,7 @@ class ContextFeatureExtractor {
             gameLikeScore = gameScore,
             nodeClassHistogram = histogram,
             eventType = event.eventType,
-            coarseOrientation = "portrait",
+            coarseOrientation = CoarseOrientation.normalize(event.coarseOrientation),
             estimatedContextCategory = estimated
         )
     }

@@ -4,7 +4,7 @@
     <string name="app_name">ContextAuthLab</string>
     <string name="app_description">Secure sensor data collection for continuous authentication research</string>
     <string name="app_version">Version 1.0.0</string>
-    <string name="accessibility_service_description">Collects redacted UI component structure for ContextAuthLab research. It does not perform clicks, gestures, screenshots, or text input.</string>
+    <string name="accessibility_service_description">Collects UI component context, visible component text, foreground app/activity metadata, and global touch interaction timing for ContextAuthLab research. It does not perform clicks, gestures, screenshots, text input, or collect touch paths/positions.</string>
     
     <!-- Main Interface -->
     <string name="main_title">ContextAuthLab</string>
@@ -77,7 +77,7 @@
     <!-- Privacy and Permissions -->
     <string name="privacy_policy">Privacy Policy</string>
     <string name="privacy_agreement_title">Privacy Agreement</string>
-    <string name="privacy_agreement_content">This application collects motion sensor data and redacted UI component context for academic research.\n\n• Sensors: accelerometer, gyroscope, and magnetic field.\n\n• Accessibility: reads accessible component structure and allowed fields only. It does not click, type, perform gestures, capture screenshots, or record keystrokes.\n\n• Text privacy: raw input field text is dropped, password nodes are dropped, and fixed-format sensitive strings are redacted before upload.\n\n• Transport: redacted data is serialized as JSON, compressed with LZ4 frame, and uploaded through HTTPS/TLS in deployment. This research stage does not use content AES encryption.\n\n• Screen state: collection stops while the screen is off or locked.\n\nBy continuing, you consent to this data collection and processing.</string>
+    <string name="privacy_agreement_content">This application collects motion sensor data, touch timing, and UI component context for academic research.\n\n• Sensors: accelerometer, gyroscope, and magnetic field.\n\n• Global touch timing: records only screen touch interaction start/end event times across the device while collection is active. It does not collect touch paths, touch coordinates, pressure, or size.\n\n• Accessibility: reads accessible component structure, foreground app/activity metadata, resource IDs, visible component text, and whether an input method is visible. It does not click, type, perform gestures, capture screenshots, or record keystrokes.\n\n• Text privacy: raw input field text is dropped, password nodes are dropped, and fixed-format sensitive strings in visible component text are redacted before upload.\n\n• Transport: data is serialized as JSON, compressed with LZ4 frame, and uploaded through HTTPS/TLS in deployment. This research stage does not use content AES encryption.\n\n• Screen state: collection stops while the screen is off or locked.\n\nBy continuing, you consent to this data collection and processing.</string>
     <string name="accept">Accept</string>
     <string name="decline">Decline</string>
     <string name="agree">Agree</string>
@@ -166,11 +166,11 @@
     <!-- Privacy Agreement Dialog -->
     <string name="privacy_welcome">Welcome to ContextAuthLab. This app is designed for academic research on redacted Android context and motion-sensor data. Please read and accept the privacy policy to continue.</string>
     <string name="privacy_data_collection_title">Data Collection:</string>
-    <string name="privacy_data_collection_content">We collect the following data for research purposes:\n• Motion sensors: accelerometer, gyroscope, and magnetic field at 100Hz\n• Redacted Accessibility component structure and context features\n• Research device ID derived from ANDROID_ID with the server study salt\n• Collection occurs only when consent, permissions, server health, ClockSync, screen/unlock state, and the Wi-Fi policy are ready</string>
+    <string name="privacy_data_collection_content">We collect the following data for research purposes:\n• Motion sensors: accelerometer, gyroscope, and magnetic field at 100Hz\n• Global screen touch interaction start/end timing, without touch paths, coordinates, pressure, or size\n• Accessibility component structure, visible component text, viewIdResourceName, foreground package/activity metadata, input-method visibility, and derived context features\n• Research device ID derived from ANDROID_ID with the server study salt\n• Collection occurs only when consent, permissions, a valid research device ID, and screen/unlock state are ready. Server health, ClockSync, rules, and Wi-Fi policy affect upload/retry status only.</string>
     <string name="privacy_data_usage_title">Data Usage:</string>
     <string name="privacy_data_usage_content">All collected data is used exclusively for:\n• Academic research on Android context and motion patterns\n• Data-quality analysis for later continuous-authentication research\n• Statistical analysis of task categories and sensor/context alignment\n• No commercial use or sale of data</string>
     <string name="privacy_data_storage_title">Data Storage &amp; Transport:</string>
-    <string name="privacy_data_storage_content">• Redaction first: raw input text is dropped and sensitive fixed-format text is replaced before upload\n• Compression: each batch is JSON serialized and compressed with LZ4 frame\n• Integrity: each envelope includes SHA-256 of the compressed bytes\n• Confidentiality: deployment relies on HTTPS/TLS; this prototype does not use content AES encryption</string>
+    <string name="privacy_data_storage_content">• Redaction first: raw input text is dropped and sensitive fixed-format strings in visible component text are replaced before upload\n• Compression: each batch is JSON serialized and compressed with LZ4 frame\n• Integrity: each envelope includes SHA-256 of the compressed bytes\n• Confidentiality: deployment relies on HTTPS/TLS; this prototype does not use content AES encryption</string>
     <string name="privacy_data_sharing_title">Data Transmission &amp; Sharing:</string>
     <string name="privacy_data_sharing_content">• Secure transmission: deployment should use HTTPS/TLS 1.2 or newer\n• No third-party sharing: raw payloads are not shared with third parties\n• Research use only: data is transmitted only to configured research servers\n• Local HTTP is intended only for emulator or lab testing</string>
     <string name="privacy_user_rights_title">Your Rights &amp; Controls:</string>
@@ -187,7 +187,7 @@
     <!-- Usage Stats Permission Dialog -->
     <string name="usage_stats_permission_explanation">This app needs access to usage statistics to collect foreground app information as contextual data.</string>
     <string name="usage_stats_permission_purpose">Purpose: Foreground app names are included in sensor data to provide context for authentication research.</string>
-    <string name="usage_stats_permission_privacy">Privacy: identifiers are hashed or redacted before upload and used only for research purposes.</string>
+    <string name="usage_stats_permission_privacy">Privacy: foreground package/activity metadata and viewIdResourceName are uploaded in plaintext by design; input-field text is dropped and sensitive visible text is redacted before upload.</string>
     <string name="usage_stats_permission_steps">Steps: Tap \'Grant Permission\' → Find this app in settings → Enable usage access.</string>
     
     <!-- Chart and Visualization -->

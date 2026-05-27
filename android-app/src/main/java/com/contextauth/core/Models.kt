@@ -67,20 +67,28 @@ enum class TaskCategory(
         "Switch between tabs, buttons, sliders, radio buttons, checkboxes, and text fields"
     ),
     C5(
-        "主动倾斜操作",
-        "倾斜迷宫",
-        "通过设备倾斜控制小球移动，产生明显姿态和角速度变化",
-        "Active tilt",
-        "Tilt maze",
-        "Move the ball by tilting the phone to create clear posture and angular-velocity changes"
+        "横屏触控挑战",
+        "点击蓝色小球",
+        "横屏点击随机出现的蓝色小球，完成连续目标触控",
+        "Landscape touch challenge",
+        "Blue ball tapping",
+        "Tap blue balls that appear at random landscape positions to capture target-touch timing"
     ),
     C6(
+        "视频观看",
+        "本地视频播放",
+        "以最舒适的手持姿势观看视频，并自然使用暂停、倍速、进度拖动和横竖屏切换",
+        "Video watching",
+        "Local video playback",
+        "Watch the video in your most comfortable grip and naturally use pause, speed, seek, and orientation controls"
+    ),
+    C7(
         "显式转腕挑战",
         "手腕转动",
-        "按动画指示做标准化左右与前后手腕旋转动作",
+        "按动画指示做标准化左右摇摆、左右平移与前后内收动作",
         "Explicit wrist rotation",
         "Wrist rotation",
-        "Follow the animation to perform standardized left-right and forward-back wrist rotations"
+        "Follow the animation to perform standardized left-right swing, lateral translation, and forward-back flexion"
     );
 
     val displayName: String
@@ -115,9 +123,9 @@ data class SensorSample(
 
 data class NodeSnapshot(
     val nodeId: String,
-    val packageNameHash: String?,
     val className: String?,
-    val viewIdHash: String?,
+    val viewIdResourceName: String?,
+    val text: String?,
     val textRedacted: String?,
     val contentDescRedacted: String?,
     val clickable: Boolean,
@@ -131,6 +139,8 @@ data class NodeSnapshot(
     val enabled: Boolean = true,
     val focused: Boolean = false,
     val selected: Boolean = false,
+    val visibleToUser: Boolean = true,
+    val longClickable: Boolean = false,
     val boundsGrid: Map<String, Int> = mapOf("left" to 0, "top" to 0, "right" to 0, "bottom" to 0),
     val actionsSummary: List<String> = emptyList()
 )
@@ -139,10 +149,22 @@ data class ContextEventSnapshot(
     val eventId: String = UUID.randomUUID().toString(),
     val eventType: String,
     val eventTimeWallMillis: Long,
-    val packageNameHash: String?,
+    val appPackageName: String?,
+    val foregroundActivityClassName: String?,
+    val foregroundComponentName: String?,
+    val inputMethodVisible: Boolean,
+    val coarseOrientation: String = CoarseOrientation.UNKNOWN,
     val windowTitleRedacted: String?,
     val rootNodes: List<NodeSnapshot>,
     val redactionSummary: Map<String, Int>
+)
+
+data class TouchEventSnapshot(
+    val eventId: String = UUID.randomUUID().toString(),
+    val eventType: String,
+    val eventTimeUptimeMillis: Long,
+    val eventTimeWallMillis: Long,
+    val collectedAtWallMillis: Long
 )
 
 data class ContextFeature(
@@ -152,6 +174,7 @@ data class ContextFeature(
     val collectionSource: CollectionSource,
     val taskCategory: TaskCategory?,
     val taskSessionId: String?,
+    val inputMethodVisible: Boolean = false,
     val editableCount: Int,
     val scrollableCount: Int,
     val clickableCount: Int,
@@ -168,7 +191,11 @@ data class ContextFeature(
 data class Batch(
     val batchId: String,
     val deviceId: String,
+    val sessionId: String,
     val collectionSource: CollectionSource,
+    val appPackageName: String? = null,
+    val foregroundActivityClassName: String? = null,
+    val foregroundComponentName: String? = null,
     val taskCategory: TaskCategory?,
     val taskSessionId: String?,
     val taskStartedAtWallMillis: Long?,
@@ -177,6 +204,7 @@ data class Batch(
     val endedAtWallMillis: Long,
     val baseElapsedNanos: Long,
     val sensorSamples: List<SensorSample>,
+    val touchEvents: List<TouchEventSnapshot>,
     val contextEvents: List<ContextEventSnapshot>,
     val contextFeatures: List<ContextFeature>,
     val skipEvents: List<Map<String, Any?>>,
@@ -194,6 +222,26 @@ data class PayloadEnvelope(
     val createdAtWallMillis: Long
 )
 
+object RuleDefaults {
+    const val BASELINE_VERSION = "1"
+    const val ZERO_HASH = "0000000000000000000000000000000000000000000000000000000000000000"
+    const val BASELINE_RULE_HASH = ZERO_HASH
+
+    private val sha256Regex = Regex("^[a-f0-9]{64}$")
+
+    fun usableVersion(version: String?): String =
+        version?.trim()?.takeIf { it.isNotBlank() } ?: BASELINE_VERSION
+
+    fun usableRuleHash(hash: String?): String {
+        val normalized = hash?.trim()?.lowercase()
+        return if (normalized != null && sha256Regex.matches(normalized)) {
+            normalized
+        } else {
+            ZERO_HASH
+        }
+    }
+}
+
 data class ClockSyncState(
     val synced: Boolean = false,
     val lastSyncedAtWallMillis: Long = 0L,
@@ -202,6 +250,15 @@ data class ClockSyncState(
     val estimatedDriftPpm: Double = 0.0,
     val source: String = "none",
     val lastError: String? = null
+)
+
+data class UploadHistoryEntry(
+    val fileName: String,
+    val batchId: String,
+    val uploadedAtWallMillis: Long,
+    val sizeBytes: Long,
+    val status: String,
+    val serverMessage: String
 )
 
 data class DiagnosticsState(
@@ -225,7 +282,9 @@ data class DiagnosticsState(
     val droppedDueToQuota: Int = 0,
     val lastQueueReplayAtWallMillis: Long = 0L,
     val earliestQueueEntryAtWallMillis: Long = 0L,
-    val lastRuleCheck: String = "not_checked"
+    val lastRuleCheck: String = "not_checked",
+    val lastUploadAtWallMillis: Long = 0L,
+    val uploadHistory: List<UploadHistoryEntry> = emptyList()
 )
 
 data class AppSettings(
@@ -235,10 +294,9 @@ data class AppSettings(
     val serverOverridden: Boolean = false,
     val batchSeconds: Int = 5,
     val taskSeconds: Int = 30,
-    val allowThirdParty: Boolean = true,
     val wifiOnly: Boolean = true,
-    val ruleVersion: String = "1",
-    val ruleHash: String = "0".repeat(64)
+    val ruleVersion: String = RuleDefaults.BASELINE_VERSION,
+    val ruleHash: String = RuleDefaults.BASELINE_RULE_HASH
 )
 
 data class UiState(

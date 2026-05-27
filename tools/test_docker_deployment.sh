@@ -12,17 +12,16 @@ trap cleanup EXIT
 docker build -t contextauthlab/server:test ./server
 docker image inspect contextauthlab/server:test >/dev/null
 
-uid="$(docker run --rm --entrypoint id contextauthlab/server:test -u)"
+uid="$(docker run --rm contextauthlab/server:test id -u)"
 test "$uid" = "1000"
 
-docker inspect contextauthlab/server:test --format '{{json .Config.Healthcheck.Test}}' | grep -q '/health'
+docker inspect contextauthlab/server:test --format '{{json .Config.Healthcheck.Test}}' | grep -q '/ready'
 if docker run --rm --entrypoint sh contextauthlab/server:test -c "find /app/app -maxdepth 2 -type d \\( -name templates -o -name static \\) | grep ." ; then
   echo "dashboard/static/template files found"
   exit 1
 fi
 
 mkdir -p data/paper logs
-chmod 0777 data/paper logs
 docker compose up -d --build
 for _ in $(seq 1 30); do
   if curl -fsS http://127.0.0.1:8000/health | grep -q '"ok"'; then
@@ -31,7 +30,7 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 curl -fsS http://127.0.0.1:8000/health | grep -q '"ok"'
-docker compose exec -T contextauthlab-server sh -c "test -w /data && test -w /app/logs"
+docker compose exec -T contextauthlab-server python -c "import os, re; status=open('/proc/1/status', encoding='utf-8').read(); assert re.search(r'^Uid:\\s+1000\\s+1000\\s+1000\\s+1000$', status, re.M); assert os.stat('/data/paper').st_uid == 1000; assert os.stat('/app/logs').st_uid == 1000"
 
 python tools/send_sample_batch.py --server http://127.0.0.1:8000 --output tools/docker_smoke_result.json
 curl -fsS http://127.0.0.1:8000/metrics | grep -q 'ingest_total'

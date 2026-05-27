@@ -1,0 +1,7 @@
+*
+!Dockerfile.artifact
+!build/
+!build/outputs/
+!build/outputs/apk/
+!build/outputs/apk/debug/
+!build/outputs/apk/debug/android-app-debug.apk

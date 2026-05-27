@@ -1,4 +1,4 @@
-// Top-level build file (build.gradle.kts)
+// Top-level build file (Groovy DSL)
 plugins {
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.kotlin.android) apply false

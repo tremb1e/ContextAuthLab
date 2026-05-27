@@ -5,7 +5,6 @@ import com.contextauth.core.RedactionEngine
 import com.contextauth.core.RedactionPatternRule
 import com.contextauth.core.RedactionPolicy
 import com.contextauth.core.RedactionSummary
-import com.contextauth.core.sha256Hex
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -39,7 +38,7 @@ class RedactionEngineTest {
         val editable = engine.sanitizeNode(
             RawNodeSnapshot(
                 "1", "pkg", "android.widget.EditText", null, "secret", null,
-                false, true, false, false, false, true, false, false, false,
+                false, true, false, false, false, true, false, false, true, false, false,
                 0, 0, emptyMap(), emptyList()
             ),
             summary
@@ -49,7 +48,7 @@ class RedactionEngineTest {
         val password = engine.sanitizeNode(
             RawNodeSnapshot(
                 "2", "pkg", "android.widget.EditText", null, "secret", null,
-                false, true, false, false, false, true, false, false, true,
+                false, true, false, false, false, true, false, false, true, false, true,
                 0, 0, emptyMap(), emptyList()
             ),
             summary
@@ -59,7 +58,7 @@ class RedactionEngineTest {
     }
 
     @Test
-    fun sanitizesNodeIdentifiersAndContentDescription() {
+    fun keepsAllowedNodeIdentifiersVisibleTextAndRedactsContentDescription() {
         val summary = RedactionSummary()
         val node = engine.sanitizeNode(
             RawNodeSnapshot(
@@ -77,6 +76,8 @@ class RedactionEngineTest {
                 true,
                 false,
                 false,
+                true,
+                false,
                 false,
                 0,
                 0,
@@ -86,33 +87,22 @@ class RedactionEngineTest {
             summary
         )!!
 
-        assertEquals(sha256Hex("com.example.notes"), node.packageNameHash)
-        assertEquals(sha256Hex("com.example.notes:id/account_email"), node.viewIdHash)
-        assertFalse(node.packageNameHash!!.contains("com.example"))
-        assertFalse(node.viewIdHash!!.contains("account_email"))
-        assertEquals("<TEXT_REDACTED> <EMAIL>", node.textRedacted)
+        assertEquals("com.example.notes:id/account_email", node.viewIdResourceName)
+        assertEquals("Contact <EMAIL>", node.text)
+        assertNull(node.textRedacted)
         assertEquals("<TEXT_REDACTED> <PHONE>", node.contentDescRedacted)
-    }
-
-    @Test
-    fun skipsSensitivePackages() {
-        assertTrue(engine.shouldSkipPackage("com.example.bank.mobile"))
-        assertTrue(engine.shouldSkipPackage("org.telegram.messenger"))
-        assertFalse(engine.shouldSkipPackage("com.example.notes"))
     }
 
     @Test
     fun appliesServerFetchedPolicyWithoutDisablingBaselineRules() {
         val dynamic = RedactionEngine {
             RedactionPolicy(
-                packageBlocklist = listOf("privatechat"),
                 maxTextLength = 16,
                 patternRules = listOf(RedactionPatternRule("ticket", """TICKET-\d+""", "<TICKET>"))
             )
         }
         val summary = RedactionSummary()
 
-        assertTrue(dynamic.shouldSkipPackage("com.example.privatechat"))
         assertEquals("<LONG_TEXT_DROPPED>", dynamic.redactText("12345678901234567", summary))
         assertEquals("<TICKET>", dynamic.redactText("TICKET-42", summary))
         assertEquals("<EMAIL>", dynamic.redactText("a@b.co", summary))
@@ -123,7 +113,6 @@ class RedactionEngineTest {
     fun emptyServerPolicyKeepsBaselineRedaction() {
         val dynamic = RedactionEngine {
             RedactionPolicy(
-                packageBlocklist = emptyList(),
                 maxTextLength = 128,
                 patternRules = emptyList()
             )
@@ -154,16 +143,55 @@ class RedactionEngineTest {
     }
 
     @Test
-    fun packageNameRulesDoNotRewriteUiText() {
+    fun contentDescriptionRulesOnlyApplyToContentDescription() {
         val dynamic = RedactionEngine {
             RedactionPolicy(
-                packageBlocklist = listOf("privatechat"),
-                patternRules = listOf(RedactionPatternRule("package", "example", "<PKG>", "package_name"))
+                patternRules = listOf(RedactionPatternRule("desc", "VIP", "<VIP>", "content_description"))
             )
         }
+        val node = dynamic.sanitizeNode(
+            RawNodeSnapshot(
+                "4",
+                "pkg",
+                "android.widget.TextView",
+                null,
+                "VIP label",
+                "VIP details",
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                true,
+                false,
+                false,
+                0,
+                0,
+                emptyMap(),
+                emptyList()
+            ),
+            RedactionSummary()
+        )!!
 
-        assertTrue(dynamic.shouldSkipPackage("com.example.privatechat"))
-        assertEquals("<TEXT_REDACTED>", dynamic.redactText("example label", RedactionSummary()))
+        assertEquals("VIP label", node.text)
+        assertNull(node.textRedacted)
+        assertEquals("<VIP> <TEXT_REDACTED>", node.contentDescRedacted)
+    }
+
+    @Test
+    fun downloadedDropAndLiteralReplacementRulesAreSafe() {
+        val drop = RedactionEngine {
+            RedactionPolicy(patternRules = listOf(RedactionPatternRule("secret", "SECRET", "<DROPPED>", "text", "DROP")))
+        }
+        val literal = RedactionEngine {
+            RedactionPolicy(patternRules = listOf(RedactionPatternRule("price", "PRICE", "<PRICE_\$>", "text")))
+        }
+
+        assertEquals("<DROPPED>", drop.redactText("SECRET value", RedactionSummary()))
+        assertEquals("<PRICE_\$>", literal.redactText("PRICE", RedactionSummary()))
     }
 
     @Test
@@ -173,5 +201,14 @@ class RedactionEngineTest {
 
         assertEquals("<TEXT_REDACTED>", redacted)
         assertEquals(1, summary.redactedPlainText)
+    }
+
+    @Test
+    fun allowDefaultPolicyStillRedactsPlainUiTextForUploadSafety() {
+        val dynamic = RedactionEngine {
+            RedactionPolicy(defaultTextAction = "ALLOW")
+        }
+
+        assertEquals("<TEXT_REDACTED>", dynamic.redactText("Alice says hello", RedactionSummary()))
     }
 }

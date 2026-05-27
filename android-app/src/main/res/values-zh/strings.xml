@@ -2,5 +2,5 @@
 <resources>
     <string name="app_name">ContextAuthLab</string>
     <string name="app_description">用于持续身份认证研究的安全传感器数据采集</string>
-    <string name="accessibility_service_description">为 ContextAuthLab 研究采集已脱敏的 UI 组件结构。不会执行点击、手势、截图或文本输入。</string>
+    <string name="accessibility_service_description">为 ContextAuthLab 研究采集 UI 组件上下文、控件显示文本、前台 App/Activity 元数据和全局屏幕触控交互时间。不会执行点击、手势、截图或文本输入，也不会采集触摸轨迹或位置。</string>
 </resources>

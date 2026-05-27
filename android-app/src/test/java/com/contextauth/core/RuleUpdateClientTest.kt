@@ -2,6 +2,7 @@ package com.contextauth.core
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -25,7 +26,6 @@ class RuleUpdateClientTest {
         assertEquals("3", result.version)
         assertEquals(result.ruleHash, result.policy.ruleHash)
         assertTrue(result.policy.patternRules.isEmpty())
-        assertTrue(result.policy.packageBlocklist.isEmpty())
         assertEquals(128, result.policy.maxTextLength)
         assertEquals("REDACT", result.policy.defaultTextAction)
     }
@@ -51,7 +51,6 @@ class RuleUpdateClientTest {
         )
 
         assertEquals("6", result.version)
-        assertEquals(listOf("bank", "password"), result.policy.packageBlocklist)
         assertEquals(listOf("email", "url"), result.policy.patternRules.map { it.name })
         assertEquals("text", result.policy.patternRules.first().target)
     }
@@ -73,7 +72,6 @@ class RuleUpdateClientTest {
             )
         )
 
-        assertEquals(listOf("privatechat"), result.policy.packageBlocklist)
         assertEquals(64, result.policy.maxTextLength)
         assertEquals("ticket_id", result.policy.patternRules.single().name)
         assertEquals("<TICKET>", result.policy.patternRules.single().replacement)
@@ -105,9 +103,9 @@ class RuleUpdateClientTest {
         assertEquals("<DROPPED>", result.policy.patternRules.single().replacement)
     }
 
-    @Test(expected = IllegalArgumentException::class)
-    fun rejectsMismatchedRuleHash() {
-        RuleUpdateClient.parseRulesResponse(
+    @Test
+    fun acceptsMismatchedRuleHashUsingComputedHash() {
+        val result = RuleUpdateClient.parseRulesResponse(
             """
             {
               "version": "5",
@@ -120,6 +118,56 @@ class RuleUpdateClientTest {
             }
             """.trimIndent()
         )
+
+        assertEquals("5", result.version)
+        assertFalse(result.ruleHash == "c".repeat(64))
+        assertTrue(result.ruleHash.matches(Regex("^[a-f0-9]{64}$")))
+        assertTrue(result.message.contains("hash mismatch ignored"))
+    }
+
+    @Test
+    fun acceptsMissingVersionAndRuleHashWithSafeDefaults() {
+        val result = RuleUpdateClient.parseRulesResponse(
+            """
+            {
+              "updated_at": "2026-05-21T00:00:00Z",
+              "rules": [{"id": "bad", "target": "text", "action": "REDACT", "pattern": "["}],
+              "package_blocklist": [],
+              "max_text_length": 0,
+              "default_text_action": "ALLOW"
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(RuleDefaults.BASELINE_VERSION, result.version)
+        assertTrue(result.ruleHash.matches(Regex("^[a-f0-9]{64}$")))
+        assertEquals(1, result.policy.maxTextLength)
+        assertEquals("REDACT", result.policy.defaultTextAction)
+        assertTrue(result.policy.patternRules.isEmpty())
+    }
+
+    @Test
+    fun skipsPackageNameTargetsAndParsesContentDescriptionTargets() {
+        val result = RuleUpdateClient.parseRulesResponse(
+            withRuleHash(
+                """
+                {
+                  "version": "7",
+                  "updated_at": "2026-05-21T00:00:00Z",
+                  "rules": [
+                    {"id": "skip-private", "target": "package_name", "action": "DROP", "pattern": "privatechat"},
+                    {"id": "desc", "target": "content_description", "action": "REDACT", "pattern": "VIP", "replacement": "<VIP>"}
+                  ],
+                  "package_blocklist": [],
+                  "max_text_length": 128,
+                  "default_text_action": "REDACT"
+                }
+                """.trimIndent()
+            )
+        )
+
+        assertEquals(listOf("content_description"), result.policy.patternRules.map { it.target })
+        assertEquals(listOf("REDACT"), result.policy.patternRules.map { it.action })
     }
 
     private fun withRuleHash(payload: String): String {

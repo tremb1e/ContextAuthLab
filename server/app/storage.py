@@ -46,10 +46,27 @@ class DiskStore:
         self._ensure_dirs()
 
     def _ensure_dirs(self) -> None:
+        try:
+            for path in [self.data_dir, self.devices_dir, self.index_dir, self.quarantine_dir]:
+                path.mkdir(parents=True, exist_ok=True)
+            for name in ["devices.jsonl", "batches.jsonl", "errors.jsonl"]:
+                (_safe_join(self.index_dir, name)).touch(exist_ok=True)
+        except PermissionError as exc:
+            raise PermissionError(
+                f"server data directory is not writable: {self.data_dir}; "
+                "check the host bind-mount owner or enable the container permission fixer"
+            ) from exc
+
+    def assert_ready(self) -> None:
+        self._ensure_dirs()
+        self.assert_space_available()
         for path in [self.data_dir, self.devices_dir, self.index_dir, self.quarantine_dir]:
-            path.mkdir(parents=True, exist_ok=True)
+            if not os.access(path, os.W_OK | os.X_OK):
+                raise PermissionError(f"server storage path is not writable: {path}")
         for name in ["devices.jsonl", "batches.jsonl", "errors.jsonl"]:
-            (_safe_join(self.index_dir, name)).touch(exist_ok=True)
+            index_path = _safe_join(self.index_dir, name)
+            if not os.access(index_path, os.W_OK):
+                raise PermissionError(f"server index file is not writable: {index_path}")
 
     def assert_space_available(self) -> None:
         free = shutil.disk_usage(self.data_dir).free

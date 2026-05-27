@@ -1,26 +1,50 @@
+x-cca-server-image: &cca-server-image
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: contextauthlab/server:${VERSION:-latest}
+
+x-cca-server-volumes: &cca-server-volumes
+  - ${DATA_VOLUME:-./data/paper}:/data/paper:rw
+  - ${LOG_VOLUME:-./logs}:/app/logs:rw
+
 services:
+  cca-server-init:
+    <<: *cca-server-image
+    container_name: cca-server-init
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "mkdir -p /data/paper /app/logs && chown -R ${SERVER_CONTAINER_UID:-1000}:${SERVER_CONTAINER_GID:-1000} /data/paper /app/logs && chmod -R u+rwX,g+rwX /data/paper /app/logs"
+    volumes: *cca-server-volumes
+    restart: "no"
+
   cca-server:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: contextauthlab/server:latest
+    <<: *cca-server-image
     container_name: cca-server
     restart: unless-stopped
+    depends_on:
+      cca-server-init:
+        condition: service_completed_successfully
     environment:
       SERVER_DATA_DIR: /data/paper
       SERVER_LOG_DIR: /app/logs
-      SERVER_STUDY_SALT: Continuous_Authentication
-      RULES_VERSION: "1"
-      INGEST_REQUIRE_AUTH: "false"
+      SERVER_RULES_FILE: ${SERVER_RULES_FILE:-/data/paper/rules.json}
+      SERVER_FIX_PERMISSIONS: ${SERVER_FIX_PERMISSIONS:-true}
+      SERVER_CHOWN_RECURSIVE: ${SERVER_CHOWN_RECURSIVE:-true}
+      APP_UID: ${SERVER_CONTAINER_UID:-1000}
+      APP_GID: ${SERVER_CONTAINER_GID:-1000}
+      SERVER_STUDY_SALT: ${SERVER_STUDY_SALT:-Continuous_Authentication}
+      RULES_VERSION: ${RULES_VERSION:-1}
+      INGEST_REQUIRE_AUTH: ${INGEST_REQUIRE_AUTH:-false}
+      TZ: ${TZ:-UTC}
     ports:
-      - "8000:8000"
-    volumes:
-      - ../data/paper:/data/paper
-      - ../logs:/app/logs
+      - "${SERVER_BIND:-127.0.0.1}:${SERVER_PORT:-14000}:8000"
+    volumes: *cca-server-volumes
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2).read()"]
       interval: 10s
       timeout: 3s
       retries: 5

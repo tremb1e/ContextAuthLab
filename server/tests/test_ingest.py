@@ -33,7 +33,10 @@ def test_ingest_valid_envelope_stores_batch_and_meta(server_client) -> None:
     stored = json.loads(batch_path.read_text(encoding="utf-8"))
     assert stored["task_category"] == "C3"
     assert stored["task_id"] == "C3"
-    assert stored["task_intuitive_description"] == "文本输入"
+    assert stored["task_intuitive_description"] == "Text entry"
+    assert stored["touch_events"][0]["event_type"] == "TOUCH_INTERACTION_START"
+    assert "x" not in stored["touch_events"][0]
+    assert stored["context_events"][0]["coarse_orientation"] == "portrait"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     assert meta["compressed_payload_omitted"] is True
     assert "payload_base64" not in json.dumps(meta)
@@ -47,6 +50,14 @@ def test_by_category_index_created(server_client) -> None:
     assert link.exists()
     if link.is_symlink():
         assert link.resolve().exists()
+
+
+def test_c7_category_index_created(server_client) -> None:
+    batch = sample_batch(task_category="C7")
+    response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
+    assert response.status_code == 200
+    link = _data_dir(server_client) / "devices" / DEVICE_ID / "by_category" / "C7" / "2024-03-09" / f"{batch['batch_id']}.json"
+    assert link.exists()
 
 
 def test_ingest_rejects_bad_device_id(server_client) -> None:
@@ -106,46 +117,58 @@ def test_lz4_roundtrip() -> None:
     assert lz4.frame.decompress(compressed) == payload
 
 
-def test_quarantine_when_unredacted_email_detected(server_client) -> None:
+def test_server_accepts_payload_without_secondary_email_scan(server_client) -> None:
     batch = sample_batch(text_redacted="alice@example.com")
     response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
-    assert response.status_code == 400
-    assert response.json()["detail"] == "unredacted_email"
-    quarantine = _data_dir(server_client) / "quarantine" / DEVICE_ID / "2024-03-09" / f"{batch['batch_id']}.json"
-    assert quarantine.exists()
+    assert response.status_code == 200
 
 
-def test_quarantine_when_card_number_detected(server_client) -> None:
+def test_server_accepts_payload_without_secondary_card_scan(server_client) -> None:
     batch = sample_batch(text_redacted="4111 1111 1111 1111")
     response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
-    assert response.status_code == 400
-    assert response.json()["detail"] == "unredacted_card"
+    assert response.status_code == 200
 
 
-def test_quarantine_when_redacted_ui_field_contains_plain_text(server_client) -> None:
+def test_server_accepts_payload_without_secondary_redacted_text_scan(server_client) -> None:
     batch = sample_batch(text_redacted="Alice hello")
     response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
-    assert response.status_code == 400
-    assert response.json()["detail"] == "unredacted_ui_text:text_redacted"
+    assert response.status_code == 200
 
 
-def test_quarantine_when_raw_accessibility_text_field_detected(server_client) -> None:
+def test_ingest_accepts_non_editable_visible_text_and_view_id_resource_name(server_client) -> None:
     batch = sample_batch()
     batch["context_events"][0]["root_nodes"][0]["text"] = "visible UI label"
+    batch["context_events"][0]["root_nodes"][0]["viewIdResourceName"] = "com.example:id/confirm"
     response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
-    assert response.status_code == 400
-    assert response.json()["detail"] == "raw_accessibility_field:text"
-    quarantine = _data_dir(server_client) / "quarantine" / DEVICE_ID / "2024-03-09" / f"{batch['batch_id']}.json"
-    assert quarantine.exists()
-    assert "visible UI label" not in quarantine.read_text(encoding="utf-8")
+    assert response.status_code == 200
+    data_dir = _data_dir(server_client)
+    batch_path = data_dir / "devices" / DEVICE_ID / "2024-03-09" / f"{batch['batch_id']}.json"
+    stored = json.loads(batch_path.read_text(encoding="utf-8"))
+    node = stored["context_events"][0]["root_nodes"][0]
+    assert node["text"] == "visible UI label"
+    assert node["viewIdResourceName"] == "com.example:id/confirm"
+    assert "package_name_hash" not in node
+    assert "view_id_hash" not in node
 
 
-def test_quarantine_when_raw_view_id_resource_name_detected(server_client) -> None:
+def test_server_accepts_legacy_ui_hash_fields_without_secondary_scan(server_client) -> None:
+    for legacy_field in ["package_name_hash", "view_id_hash"]:
+        batch = sample_batch()
+        batch["context_events"][0]["root_nodes"][0][legacy_field] = "a" * 64
+        response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
+        assert response.status_code == 200
+
+
+def test_quarantine_when_editable_node_contains_raw_text(server_client) -> None:
     batch = sample_batch()
-    batch["context_events"][0]["root_nodes"][0]["viewIdResourceName"] = "com.example:id/private"
+    node = batch["context_events"][0]["root_nodes"][0]
+    node["class_name"] = "android.widget.EditText"
+    node["editable"] = True
+    node["text"] = "typed secret"
+    node["text_redacted"] = "<EDITABLE_TEXT_DROPPED>"
     response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
     assert response.status_code == 400
-    assert response.json()["detail"] == "raw_accessibility_field:viewIdResourceName"
+    assert response.json()["detail"] == "schema_validation_failed"
 
 
 def test_schema_rejects_batches_without_redaction_applied(server_client) -> None:
@@ -190,6 +213,22 @@ def test_envelope_batch_id_mismatch(server_client) -> None:
     response = server_client.post("/api/v1/ingest", json=env)
     assert response.status_code == 400
     assert response.json()["detail"] == "envelope_batch_id_mismatch"
+
+
+def test_ingest_accepts_missing_or_stale_rule_hash(server_client) -> None:
+    batch = sample_batch()
+    batch["rule_hash"] = "0" * 64
+    response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
+    assert response.status_code == 200
+
+
+def test_ingest_accepts_rule_version_metadata_mismatch(server_client) -> None:
+    batch = sample_batch()
+    env = envelope_for(batch)
+    env["rule_version"] = "stale"
+    env["rule_hash"] = "c" * 64
+    response = server_client.post("/api/v1/ingest", json=env)
+    assert response.status_code == 200
 
 
 def test_error_log_no_plain_payload(server_client) -> None:

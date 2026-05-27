@@ -17,6 +17,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -26,6 +27,7 @@ import kotlin.math.roundToInt
 
 class CollectionCoordinator(private val context: Context) {
     private data class ActiveCollectionContext(
+        val collectionSessionId: String,
         val taskCategory: TaskCategory?,
         val taskSessionId: String?,
         val taskStartedAt: Long?,
@@ -36,6 +38,7 @@ class CollectionCoordinator(private val context: Context) {
     private data class PendingStoppedBatch(
         val state: UiState,
         val samples: List<SensorSample>,
+        val touches: List<TouchEventSnapshot>,
         val events: List<ContextEventSnapshot>,
         val collectionContext: ActiveCollectionContext
     )
@@ -60,7 +63,9 @@ class CollectionCoordinator(private val context: Context) {
     val clockState: StateFlow<ClockSyncState> = clockSync.state
 
     private val contextEvents = ArrayList<ContextEventSnapshot>()
+    private val touchEvents = ArrayList<TouchEventSnapshot>()
     private var collectionJob: Job? = null
+    private var collectionSessionId: String = UUID.randomUUID().toString()
     private var taskSessionId: String? = null
     private var taskCategory: TaskCategory? = null
     private var taskStartedAt: Long? = null
@@ -102,8 +107,18 @@ class CollectionCoordinator(private val context: Context) {
             }
         }
         scope.launch {
-            AccessibilityEventBus.events.collectLatest { event ->
+            AccessibilityEventBus.events.collect { event ->
+                if (mutableUi.value.status != CollectionStatus.RUNNING) return@collect
                 synchronized(contextEvents) { contextEvents.add(event) }
+                val buckets = mutableUi.value.diagnostics.eventBuckets.toMutableMap()
+                buckets[event.eventType] = (buckets[event.eventType] ?: 0) + 1
+                mutableUi.value = mutableUi.value.copy(diagnostics = mutableUi.value.diagnostics.copy(eventBuckets = buckets))
+            }
+        }
+        scope.launch {
+            TouchEventBus.events.collect { event ->
+                if (mutableUi.value.status != CollectionStatus.RUNNING) return@collect
+                synchronized(touchEvents) { touchEvents.add(event) }
                 val buckets = mutableUi.value.diagnostics.eventBuckets.toMutableMap()
                 buckets[event.eventType] = (buckets[event.eventType] ?: 0) + 1
                 mutableUi.value = mutableUi.value.copy(diagnostics = mutableUi.value.diagnostics.copy(eventBuckets = buckets))
@@ -153,7 +168,6 @@ class CollectionCoordinator(private val context: Context) {
 
     fun setBatchSeconds(value: Int) = settingsStore.setBatchSeconds(value)
     fun setTaskSeconds(value: Int) = settingsStore.setTaskSeconds(value)
-    fun setAllowThirdParty(value: Boolean) = settingsStore.setAllowThirdParty(value)
     fun setWifiOnly(value: Boolean) = settingsStore.setWifiOnly(value)
     fun clearQueue() = uploader.clearQueue().also { refreshQueue() }
 
@@ -172,14 +186,14 @@ class CollectionCoordinator(private val context: Context) {
         refreshPermissionState()
         val state = mutableUi.value
         if (!canStart(state)) return
-        if (category == null && !state.settings.allowThirdParty) return
         val previousContext = currentCollectionContext()
         if (state.status == CollectionStatus.RUNNING && previousContext.taskCategory == category) return
         if (state.status == CollectionStatus.RUNNING) {
             collectionJob?.cancel()
             val samples = sensorCollector.stop()
             val events = drainContextEvents()
-            scope.launch { uploadBatch(state, samples, events, previousContext) }
+            val touches = drainTouchEvents()
+            scope.launch { uploadBatch(state, samples, touches, events, previousContext) }
         }
         val previousCategory = taskCategory
         val previousSession = taskSessionId
@@ -195,6 +209,8 @@ class CollectionCoordinator(private val context: Context) {
         } else {
             category?.let { System.currentTimeMillis() }
         }
+        drainContextEvents()
+        drainTouchEvents()
         sensorCollector.start(state.clock.serverOffsetMillis)
         mutableUi.value = mutableUi.value.copy(status = CollectionStatus.RUNNING)
         collectionJob?.cancel()
@@ -208,21 +224,24 @@ class CollectionCoordinator(private val context: Context) {
 
     fun stopCollection(scope: CoroutineScope) {
         val state = mutableUi.value
+        if (state.status == CollectionStatus.IDLE) return
         val finishedContext = currentCollectionContext()
         collectionJob?.cancel()
         val samples = sensorCollector.stop()
         val events = drainContextEvents()
+        val touches = drainTouchEvents()
         taskCategory = null
         taskSessionId = null
         taskStartedAt = null
+        if (!finishedContext.gatedResume) collectionSessionId = UUID.randomUUID().toString()
         mutableUi.value = mutableUi.value.copy(status = CollectionStatus.IDLE)
-        scope.launch { uploadBatch(state, samples, events, finishedContext) }
+        scope.launch { uploadBatch(state, samples, touches, events, finishedContext) }
     }
 
     fun pauseForScreen(reason: CollectionStatus, scope: CoroutineScope? = null) {
         val pending = stopForScreenGate(reason)
-        if (scope != null && (pending.samples.isNotEmpty() || pending.events.isNotEmpty())) {
-            scope.launch { uploadBatch(pending.state, pending.samples, pending.events, pending.collectionContext) }
+        if (scope != null && (pending.samples.isNotEmpty() || pending.touches.isNotEmpty() || pending.events.isNotEmpty())) {
+            scope.launch { uploadBatch(pending.state, pending.samples, pending.touches, pending.events, pending.collectionContext) }
         }
     }
 
@@ -275,21 +294,19 @@ class CollectionCoordinator(private val context: Context) {
             diagnostics = mutableUi.value.diagnostics.copy(
                 accessibilityEnabled = enabled,
                 queueEntries = uploader.queueEntries(),
-                queueBytes = uploader.queueBytes()
+                queueBytes = uploader.queueBytes(),
+                uploadHistory = uploader.uploadHistory()
             )
         )
     }
 
     fun canStart(state: UiState = mutableUi.value): Boolean =
         state.settings.consentGranted &&
+            isValidDeviceId(state.deviceId) &&
             state.accessibilityEnabled &&
             state.batteryWhitelisted &&
             state.notificationAllowed &&
-            state.serverReachable &&
-            state.clock.synced &&
-            state.settings.ruleHash != "0".repeat(64) &&
-            isScreenActive() &&
-            (!state.settings.wifiOnly || isWifiConnected())
+            isScreenActive()
 
     private suspend fun serverHealthLoop() {
         while (true) {
@@ -309,8 +326,7 @@ class CollectionCoordinator(private val context: Context) {
         mutableUi.value = mutableUi.value.copy(
             serverReachable = result.isSuccess,
             lastServerHealthAtWallMillis = if (result.isSuccess) now else mutableUi.value.lastServerHealthAtWallMillis,
-            diagnostics = mutableUi.value.diagnostics.copy(lastServerMessage = message),
-            recentUploadStatus = message
+            diagnostics = mutableUi.value.diagnostics.copy(lastServerMessage = message)
         )
     }
 
@@ -319,22 +335,26 @@ class CollectionCoordinator(private val context: Context) {
         if (state.status != CollectionStatus.RUNNING && !finalFlush) return
         if (!isScreenActive()) {
             val pending = stopForScreenGate(CollectionStatus.PAUSED_BY_SCREEN_OFF)
-            uploadBatch(pending.state, pending.samples, pending.events, pending.collectionContext)
+            uploadBatch(pending.state, pending.samples, pending.touches, pending.events, pending.collectionContext)
             return
         }
         val samples = sensorCollector.drain()
+        val touches = drainTouchEvents()
         val events = drainContextEvents()
-        uploadBatch(state, samples, events, currentCollectionContext())
+        uploadBatch(state, samples, touches, events, currentCollectionContext())
     }
 
     private suspend fun uploadBatch(
         state: UiState,
         samples: List<SensorSample>,
+        touches: List<TouchEventSnapshot>,
         events: List<ContextEventSnapshot>,
         collectionContext: ActiveCollectionContext
     ) {
-        if (samples.isEmpty() && events.isEmpty()) return
-        val batch = buildBatch(state, samples, events, collectionContext)
+        if (samples.isEmpty() && touches.isEmpty() && events.isEmpty()) return
+        refreshPermissionState()
+        if (!mutableUi.value.accessibilityEnabled) return
+        val batch = buildBatch(state, samples, touches, events, collectionContext)
         val envelopeResult = JsonCodec.buildEnvelopeWithMetrics(
             batch,
             state.settings.ruleVersion,
@@ -346,11 +366,7 @@ class CollectionCoordinator(private val context: Context) {
             uploader.queueOnly(envelopeResult.envelope, "paused_by_no_network")
             val currentUi = mutableUi.value
             mutableUi.value = currentUi.copy(
-                status = if (collectionContext == currentCollectionContext()) {
-                    CollectionStatus.PAUSED_BY_NO_NETWORK
-                } else {
-                    currentUi.status
-                },
+                status = currentUi.status,
                 diagnostics = currentUi.diagnostics.copy(
                     queueEntries = uploader.queueEntries(),
                     queueBytes = uploader.queueBytes(),
@@ -358,7 +374,8 @@ class CollectionCoordinator(private val context: Context) {
                     serializeCompressP95Ms = percentileMillis(serializeCompressTimes, 0.95),
                     shaP50Ms = percentileMillis(shaTimes, 0.50),
                     shaP95Ms = percentileMillis(shaTimes, 0.95),
-                    earliestQueueEntryAtWallMillis = uploader.earliestQueueEntryAt()
+                    earliestQueueEntryAtWallMillis = uploader.earliestQueueEntryAt(),
+                    uploadHistory = uploader.uploadHistory()
                 )
             )
             return
@@ -381,7 +398,9 @@ class CollectionCoordinator(private val context: Context) {
                 shaP50Ms = percentileMillis(shaTimes, 0.50),
                 shaP95Ms = percentileMillis(shaTimes, 0.95),
                 uploadP50Ms = percentileMillis(uploadTimes, 0.50),
-                uploadP95Ms = percentileMillis(uploadTimes, 0.95)
+                uploadP95Ms = percentileMillis(uploadTimes, 0.95),
+                lastUploadAtWallMillis = System.currentTimeMillis(),
+                uploadHistory = uploader.uploadHistory()
             )
         } else {
             diagnostics.copy(
@@ -397,16 +416,17 @@ class CollectionCoordinator(private val context: Context) {
                 uploadP50Ms = percentileMillis(uploadTimes, 0.50),
                 uploadP95Ms = percentileMillis(uploadTimes, 0.95),
                 droppedDueToQuota = uploader.droppedDueToQuota(),
-                earliestQueueEntryAtWallMillis = uploader.earliestQueueEntryAt()
+                earliestQueueEntryAtWallMillis = uploader.earliestQueueEntryAt(),
+                uploadHistory = uploader.uploadHistory()
             )
         }
         mutableUi.value = mutableUi.value.copy(
-            diagnostics = nextDiagnostics,
-            recentUploadStatus = nextDiagnostics.lastServerMessage
+            diagnostics = nextDiagnostics
         )
     }
 
     private fun currentCollectionContext(): ActiveCollectionContext = ActiveCollectionContext(
+        collectionSessionId = collectionSessionId,
         taskCategory = taskCategory,
         taskSessionId = taskSessionId,
         taskStartedAt = taskStartedAt,
@@ -432,23 +452,27 @@ class CollectionCoordinator(private val context: Context) {
                 queueEntries = uploader.queueEntries(),
                 queueBytes = uploader.queueBytes(),
                 droppedDueToQuota = uploader.droppedDueToQuota(),
-                earliestQueueEntryAtWallMillis = uploader.earliestQueueEntryAt()
+                earliestQueueEntryAtWallMillis = uploader.earliestQueueEntryAt(),
+                uploadHistory = uploader.uploadHistory()
             )
         )
     }
 
     private suspend fun replayFailureQueueIfAllowed() {
         val state = mutableUi.value
-        if (!isScreenActive() || (state.settings.wifiOnly && !isWifiConnected())) return
+        if (!state.accessibilityEnabled || !isScreenActive() || (state.settings.wifiOnly && !isWifiConnected())) return
         val replayed = uploader.replayDue(state.settings.serverUrl)
         if (replayed > 0) {
+            val now = System.currentTimeMillis()
             mutableUi.value = mutableUi.value.copy(
                 diagnostics = state.diagnostics.copy(
                     retrying = state.diagnostics.retrying + replayed,
                     queueEntries = uploader.queueEntries(),
                     queueBytes = uploader.queueBytes(),
-                    lastQueueReplayAtWallMillis = System.currentTimeMillis(),
-                    earliestQueueEntryAtWallMillis = uploader.earliestQueueEntryAt()
+                    lastQueueReplayAtWallMillis = now,
+                    earliestQueueEntryAtWallMillis = uploader.earliestQueueEntryAt(),
+                    lastUploadAtWallMillis = now,
+                    uploadHistory = uploader.uploadHistory()
                 )
             )
         }
@@ -502,37 +526,50 @@ class CollectionCoordinator(private val context: Context) {
         copy
     }
 
+    private fun drainTouchEvents(): List<TouchEventSnapshot> = synchronized(touchEvents) {
+        val copy = touchEvents.toList()
+        touchEvents.clear()
+        copy
+    }
+
     private fun stopForScreenGate(reason: CollectionStatus): PendingStoppedBatch {
         val state = mutableUi.value
         val pausedContext = currentCollectionContext()
         resumeAfterGate = state.status == CollectionStatus.RUNNING
         collectionJob?.cancel()
         val samples = sensorCollector.stop()
+        val touches = drainTouchEvents()
         val events = drainContextEvents()
         val history = (listOf("${System.currentTimeMillis()}: $reason") + state.diagnostics.screenGateHistory).take(10)
         mutableUi.value = state.copy(
             status = reason,
             diagnostics = state.diagnostics.copy(screenGateHistory = history)
         )
-        return PendingStoppedBatch(state, samples, events, pausedContext)
+        return PendingStoppedBatch(state, samples, touches, events, pausedContext)
     }
 
     private fun buildBatch(
         state: UiState,
         samples: List<SensorSample>,
+        touches: List<TouchEventSnapshot>,
         events: List<ContextEventSnapshot>,
         collectionContext: ActiveCollectionContext
     ): Batch {
         val now = System.currentTimeMillis()
         val started = listOfNotNull(
             samples.minOfOrNull { it.wallTimeEstimatedMillis },
+            touches.minOfOrNull { it.eventTimeWallMillis },
             events.minOfOrNull { it.eventTimeWallMillis }
         ).minOrNull() ?: now
         val ended = listOfNotNull(
             samples.maxOfOrNull { it.wallTimeEstimatedMillis },
+            touches.maxOfOrNull { it.eventTimeWallMillis },
             events.maxOfOrNull { it.eventTimeWallMillis }
         ).maxOrNull() ?: now
         val source = if (collectionContext.taskCategory != null) CollectionSource.BUILTIN_TASK else CollectionSource.THIRD_PARTY_APP
+        val foregroundEvent = events.lastOrNull { !it.appPackageName.isNullOrBlank() }
+        val foregroundActivityEvent = events.lastOrNull { !it.foregroundActivityClassName.isNullOrBlank() }
+        val foregroundComponentEvent = events.lastOrNull { !it.foregroundComponentName.isNullOrBlank() }
         val features = events.map {
             featureExtractor.extract(
                 it,
@@ -544,7 +581,11 @@ class CollectionCoordinator(private val context: Context) {
         return Batch(
             batchId = UUID.randomUUID().toString(),
             deviceId = state.deviceId,
+            sessionId = collectionContext.taskSessionId ?: collectionContext.collectionSessionId,
             collectionSource = source,
+            appPackageName = foregroundEvent?.appPackageName,
+            foregroundActivityClassName = foregroundActivityEvent?.foregroundActivityClassName,
+            foregroundComponentName = foregroundComponentEvent?.foregroundComponentName,
             taskCategory = collectionContext.taskCategory,
             taskSessionId = collectionContext.taskSessionId,
             taskStartedAtWallMillis = collectionContext.taskStartedAt,
@@ -553,6 +594,7 @@ class CollectionCoordinator(private val context: Context) {
             endedAtWallMillis = ended,
             baseElapsedNanos = collectionContext.baseElapsedNanos,
             sensorSamples = samples,
+            touchEvents = touches,
             contextEvents = events,
             contextFeatures = features,
             skipEvents = emptyList(),
@@ -572,4 +614,7 @@ class CollectionCoordinator(private val context: Context) {
         val keyguard = appContext.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
         return (if (Build.VERSION.SDK_INT >= 20) pm.isInteractive else true) && !keyguard.isKeyguardLocked
     }
+
+    private fun isValidDeviceId(value: String): Boolean =
+        value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' }
 }

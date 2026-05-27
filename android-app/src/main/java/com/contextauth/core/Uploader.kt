@@ -22,15 +22,28 @@ class Uploader(
 
     suspend fun uploadOrQueue(serverUrl: String, envelope: PayloadEnvelope, allowQueue: Boolean = true): Result<String> = withContext(Dispatchers.IO) {
         val body = JsonCodec.envelopeToJson(envelope)
+        val bodyBytes = body.toByteArray(Charsets.UTF_8).size.toLong()
         runCatching {
             postEnvelope(serverUrl, body)
-        }.onFailure {
-            if (allowQueue) writeQueue(envelope, body, it.message ?: it::class.java.simpleName)
+        }.onSuccess { message ->
+            recordHistory(envelope, "${envelope.batchId}.json", bodyBytes, "SUCCESS", message)
+        }.onFailure { error ->
+            if (allowQueue && FailureQueuePolicy.shouldQueueFailure(error)) {
+                writeQueue(envelope, body, error.message ?: error::class.java.simpleName, "QUEUED")
+            } else {
+                recordHistory(
+                    envelope,
+                    "${envelope.batchId}.json",
+                    bodyBytes,
+                    "FAILED",
+                    error.message ?: error::class.java.simpleName
+                )
+            }
         }
     }
 
     fun queueOnly(envelope: PayloadEnvelope, reason: String) {
-        writeQueue(envelope, JsonCodec.envelopeToJson(envelope), reason)
+        writeQueue(envelope, JsonCodec.envelopeToJson(envelope), reason, "QUEUED_NO_NETWORK")
     }
 
     suspend fun replayDue(serverUrl: String): Int = withContext(Dispatchers.IO) {
@@ -44,7 +57,8 @@ class Uploader(
             }
             val body = file.readText(Charsets.UTF_8)
             runCatching { postEnvelope(serverUrl, body) }
-                .onSuccess {
+                .onSuccess { message ->
+                    recordHistory(item.fileName, item.batchId, now, file.length(), "REPLAY_SUCCESS", message)
                     file.delete()
                     metadata.delete(item.fileName)
                     replayed += 1
@@ -52,9 +66,25 @@ class Uploader(
                 .onFailure { error ->
                     val nextRetry = item.retryCount + 1
                     if (FailureQueuePolicy.shouldDeadLetter(nextRetry)) {
+                        recordHistory(
+                            item.fileName,
+                            item.batchId,
+                            now,
+                            file.length(),
+                            "DEAD_LETTER",
+                            error.message ?: error::class.java.simpleName
+                        )
                         file.renameTo(File(deadLetterDir, file.name))
                         metadata.delete(item.fileName)
                     } else {
+                        recordHistory(
+                            item.fileName,
+                            item.batchId,
+                            now,
+                            file.length(),
+                            "RETRY_SCHEDULED",
+                            error.message ?: error::class.java.simpleName
+                        )
                         metadata.upsert(
                             item.copy(
                                 retryCount = nextRetry,
@@ -78,6 +108,7 @@ class Uploader(
     fun queueBytes(): Long = metadata.totalBytes()
     fun droppedDueToQuota(): Int = droppedDueToQuota
     fun earliestQueueEntryAt(): Long = metadata.oldest()?.createdAt ?: 0L
+    fun uploadHistory(limit: Int = 50): List<UploadHistoryEntry> = metadata.uploadHistory(limit)
 
     private fun postEnvelope(serverUrl: String, body: String): String {
         val request = Request.Builder()
@@ -88,12 +119,12 @@ class Uploader(
         client.newCall(request).execute().use { resp ->
             val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
             val responseText = resp.body?.string()?.take(120).orEmpty()
-            if (!resp.isSuccessful) error("HTTP ${resp.code}: $responseText")
+            if (!resp.isSuccessful) throw UploadHttpException(resp.code, responseText)
             return "HTTP ${resp.code}, ${elapsedMs}ms"
         }
     }
 
-    private fun writeQueue(envelope: PayloadEnvelope, body: String, reason: String) {
+    private fun writeQueue(envelope: PayloadEnvelope, body: String, reason: String, status: String) {
         val bodyBytes = body.toByteArray(Charsets.UTF_8).size.toLong()
         while (queueBytes() + bodyBytes > FailureQueuePolicy.QUEUE_LIMIT_BYTES) {
             val oldest = metadata.oldest() ?: break
@@ -118,8 +149,41 @@ class Uploader(
                 nextRetryAtWallMillis = System.currentTimeMillis() + FailureQueuePolicy.fullJitterDelayMillis(0, Math.random())
             )
         )
+        recordHistory(envelope, file.name, bodyBytes, status, reason)
+    }
+
+    private fun recordHistory(
+        envelope: PayloadEnvelope,
+        fileName: String,
+        sizeBytes: Long,
+        status: String,
+        serverMessage: String
+    ) {
+        recordHistory(fileName, envelope.batchId, System.currentTimeMillis(), sizeBytes, status, serverMessage)
+    }
+
+    private fun recordHistory(
+        fileName: String,
+        batchId: String,
+        uploadedAtWallMillis: Long,
+        sizeBytes: Long,
+        status: String,
+        serverMessage: String
+    ) {
+        metadata.recordUploadHistory(
+            UploadHistoryEntry(
+                fileName = fileName,
+                batchId = batchId,
+                uploadedAtWallMillis = uploadedAtWallMillis,
+                sizeBytes = sizeBytes,
+                status = status,
+                serverMessage = serverMessage
+            )
+        )
     }
 }
+
+class UploadHttpException(val statusCode: Int, responseText: String) : RuntimeException("HTTP $statusCode: $responseText")
 
 object FailureQueuePolicy {
     const val QUEUE_LIMIT_BYTES: Long = 200L * 1024L * 1024L
@@ -137,6 +201,12 @@ object FailureQueuePolicy {
         val bounded = jitterFraction.coerceIn(0.0, 1.0)
         return (cappedBackoffMillis(retryCount) * bounded).toLong()
     }
+
+    fun isRetriableHttpStatus(statusCode: Int): Boolean =
+        statusCode == 408 || statusCode == 429 || statusCode >= 500
+
+    fun shouldQueueFailure(error: Throwable): Boolean =
+        error !is UploadHttpException || isRetriableHttpStatus(error.statusCode)
 
     fun shouldDeadLetter(retryCount: Int): Boolean = retryCount >= MAX_RETRY_COUNT
 }

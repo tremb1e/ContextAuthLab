@@ -6,6 +6,7 @@ import com.contextauth.core.ContextEventSnapshot
 import com.contextauth.core.JsonCodec
 import com.contextauth.core.NodeSnapshot
 import com.contextauth.core.SensorSample
+import com.contextauth.core.TouchEventSnapshot
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -19,6 +20,7 @@ class BatchSerializationTest {
         val batch = Batch(
             batchId = UUID.randomUUID().toString(),
             deviceId = "a".repeat(64),
+            sessionId = UUID.randomUUID().toString(),
             collectionSource = CollectionSource.THIRD_PARTY_APP,
             taskCategory = null,
             taskSessionId = null,
@@ -28,18 +30,22 @@ class BatchSerializationTest {
             endedAtWallMillis = 6_000,
             baseElapsedNanos = 123,
             sensorSamples = listOf(SensorSample("ACCELEROMETER", 10, 1_001, 0f, 0f, 9.8f, 3)),
+            touchEvents = emptyList(),
             contextEvents = listOf(
                 ContextEventSnapshot(
                     eventType = "TYPE_VIEW_TEXT_CHANGED",
                     eventTimeWallMillis = 1_100,
-                    packageNameHash = "b".repeat(64),
+                    appPackageName = "com.example.front",
+                    foregroundActivityClassName = "com.example.front.MainActivity",
+                    foregroundComponentName = "com.example.front/.MainActivity",
+                    inputMethodVisible = true,
                     windowTitleRedacted = "<DROPPED>",
                     rootNodes = listOf(
                         NodeSnapshot(
                             nodeId = "node-1",
-                            packageNameHash = "b".repeat(64),
                             className = "android.widget.EditText",
-                            viewIdHash = null,
+                            viewIdResourceName = null,
+                            text = null,
                             textRedacted = "<EDITABLE_TEXT_DROPPED>",
                             contentDescRedacted = null,
                             clickable = true,
@@ -68,15 +74,18 @@ class BatchSerializationTest {
         val event = ContextEventSnapshot(
             eventType = "TYPE_VIEW_CLICKED",
             eventTimeWallMillis = 1_100,
-            packageNameHash = "b".repeat(64),
-            windowTitleRedacted = "Settings",
+            appPackageName = "com.example.front",
+            foregroundActivityClassName = "com.example.front.MainActivity",
+            foregroundComponentName = "com.example.front/.MainActivity",
+            inputMethodVisible = false,
+            windowTitleRedacted = "<TEXT_REDACTED>",
             rootNodes = listOf(
                 NodeSnapshot(
                     nodeId = "node-1",
-                    packageNameHash = "b".repeat(64),
                     className = "android.widget.Button",
-                    viewIdHash = "c".repeat(64),
-                    textRedacted = "<TEXT_REDACTED>",
+                    viewIdResourceName = "com.example.front:id/confirm",
+                    text = "确认",
+                    textRedacted = null,
                     contentDescRedacted = "<TEXT_REDACTED>",
                     clickable = true,
                     editable = false,
@@ -98,6 +107,7 @@ class BatchSerializationTest {
         val batch = Batch(
             batchId = UUID.randomUUID().toString(),
             deviceId = "a".repeat(64),
+            sessionId = UUID.randomUUID().toString(),
             collectionSource = CollectionSource.THIRD_PARTY_APP,
             taskCategory = null,
             taskSessionId = null,
@@ -107,6 +117,7 @@ class BatchSerializationTest {
             endedAtWallMillis = 6_000,
             baseElapsedNanos = 123,
             sensorSamples = emptyList(),
+            touchEvents = emptyList(),
             contextEvents = listOf(event),
             contextFeatures = emptyList(),
             skipEvents = emptyList()
@@ -120,14 +131,18 @@ class BatchSerializationTest {
             .getJSONObject(0)
 
         assertEquals("android.widget.Button", node.getString("class_name"))
-        assertEquals("c".repeat(64), node.getString("view_id_hash"))
-        assertEquals("<TEXT_REDACTED>", node.getString("text_redacted"))
+        assertEquals("com.example.front:id/confirm", node.getString("viewIdResourceName"))
+        assertEquals("确认", node.getString("text"))
+        assertTrue(node.isNull("text_redacted"))
         assertEquals("<TEXT_REDACTED>", node.getString("content_desc_redacted"))
         assertTrue(node.getBoolean("clickable"))
         assertEquals(1, node.getJSONObject("bounds_grid").getInt("left"))
         assertEquals("CLICK", node.getJSONArray("actions_summary").getString(0))
-        assertFalse(json.contains("\"text\":"))
+        assertEquals("com.example.front", JSONObject(json).getString("app_package_name"))
+        assertEquals("com.example.front.MainActivity", JSONObject(json).getString("foreground_activity_class_name"))
         assertFalse(json.contains("\"view_id\":"))
+        assertFalse(json.contains("package_name_hash"))
+        assertFalse(json.contains("view_id_hash"))
         assertFalse(json.contains("Submit"))
     }
 
@@ -136,6 +151,7 @@ class BatchSerializationTest {
         val batch = Batch(
             batchId = UUID.randomUUID().toString(),
             deviceId = "a".repeat(64),
+            sessionId = UUID.randomUUID().toString(),
             collectionSource = CollectionSource.THIRD_PARTY_APP,
             taskCategory = null,
             taskSessionId = null,
@@ -145,11 +161,15 @@ class BatchSerializationTest {
             endedAtWallMillis = 6_000,
             baseElapsedNanos = 123,
             sensorSamples = emptyList(),
+            touchEvents = emptyList(),
             contextEvents = listOf(
                 ContextEventSnapshot(
                     eventType = "TYPE_VIEW_CLICKED",
                     eventTimeWallMillis = 1_100,
-                    packageNameHash = "b".repeat(64),
+                    appPackageName = "com.example.front",
+                    foregroundActivityClassName = "com.example.front.MainActivity",
+                    foregroundComponentName = "com.example.front/.MainActivity",
+                    inputMethodVisible = true,
                     windowTitleRedacted = "<TEXT_REDACTED>\r\n<TOKEN>",
                     rootNodes = emptyList(),
                     redactionSummary = emptyMap()
@@ -164,5 +184,37 @@ class BatchSerializationTest {
             "<TEXT_REDACTED>\r\n<TOKEN>",
             parsed.getJSONArray("context_events").getJSONObject(0).getString("window_title_redacted")
         )
+    }
+
+    @Test
+    fun batchJsonContainsTouchTimingWithoutPositionFields() {
+        val batch = Batch(
+            batchId = UUID.randomUUID().toString(),
+            deviceId = "a".repeat(64),
+            sessionId = "session-1",
+            collectionSource = CollectionSource.THIRD_PARTY_APP,
+            taskCategory = null,
+            taskSessionId = null,
+            taskStartedAtWallMillis = null,
+            taskElapsedSecondsAtBatchEnd = null,
+            startedAtWallMillis = 1_000,
+            endedAtWallMillis = 6_000,
+            baseElapsedNanos = 123,
+            sensorSamples = listOf(SensorSample("ACCELEROMETER", 10, 1_001, 0f, 0f, 9.8f, 3)),
+            touchEvents = listOf(TouchEventSnapshot("touch-1", "TOUCH_INTERACTION_START", 1234, 1_200, 1_201)),
+            contextEvents = emptyList(),
+            contextFeatures = emptyList(),
+            skipEvents = emptyList()
+        )
+
+        val json = JsonCodec.batchToJson(batch, "1", "b".repeat(64))
+        val touch = JSONObject(json).getJSONArray("touch_events").getJSONObject(0)
+
+        assertEquals("TOUCH_INTERACTION_START", touch.getString("event_type"))
+        assertEquals(1234, touch.getLong("event_time_uptime_millis"))
+        assertFalse(touch.has("x"))
+        assertFalse(touch.has("y"))
+        assertFalse(touch.has("pressure"))
+        assertFalse(touch.has("size"))
     }
 }

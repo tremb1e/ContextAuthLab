@@ -16,4 +16,13 @@ class FailureQueuePolicyTest {
         assertFalse(FailureQueuePolicy.shouldDeadLetter(19))
         assertTrue(FailureQueuePolicy.shouldDeadLetter(20))
     }
+
+    @Test
+    fun clientErrorsAreNotQueuedButRetriableFailuresAreQueued() {
+        assertFalse(FailureQueuePolicy.shouldQueueFailure(UploadHttpException(400, "schema_validation_failed")))
+        assertFalse(FailureQueuePolicy.shouldQueueFailure(UploadHttpException(422, "bad payload")))
+        assertTrue(FailureQueuePolicy.shouldQueueFailure(UploadHttpException(429, "too many requests")))
+        assertTrue(FailureQueuePolicy.shouldQueueFailure(UploadHttpException(500, "server error")))
+        assertTrue(FailureQueuePolicy.shouldQueueFailure(RuntimeException("network down")))
+    }
 }

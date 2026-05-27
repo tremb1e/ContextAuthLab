@@ -1,7 +1,20 @@
-.PHONY: build up down restart logs shell health sample-ingest backup prune-data clean-data test-server test-android test-e2e test-docker test-load test-all server-test android-test e2e docker-test
+.PHONY: build build-images build-server-image build-app-image apk up down restart logs shell health sample-ingest backup prune-data clean-data test-server test-android test-e2e test-docker test-load test-all server-test android-test e2e docker-test
 
 build:
 	docker compose build
+
+build-images: build-server-image build-app-image
+
+build-server-image:
+	docker build -t contextauthlab/server:$${VERSION:-latest} ./server
+
+apk:
+	JAVA_HOME=/opt/android-studio/jbr ANDROID_HOME=/home/tremb1e/Android/Sdk ./gradlew :android-app:assembleDebug
+	mkdir -p artifacts
+	cp android-app/build/outputs/apk/debug/android-app-debug.apk artifacts/contextauthlab-debug.apk
+
+build-app-image: apk
+	docker build -f android-app/Dockerfile.artifact -t contextauthlab/android-app-debug:$${VERSION:-latest} android-app
 
 up:
 	docker compose up -d
@@ -47,7 +60,7 @@ test-docker:
 	bash tools/test_docker_deployment.sh
 
 test-load:
-	python tools/test_load.py --duration 300 --devices 50
+	python tools/test_load.py --iterations 60 --interval 5 --devices 50
 
 test-all: test-server test-android test-e2e test-docker
 

@@ -22,24 +22,17 @@ class QueueMetadataStore(context: Context) : SQLiteOpenHelper(
     DATABASE_VERSION
 ) {
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS upload_queue (
-                file_name TEXT PRIMARY KEY NOT NULL,
-                batch_id TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                size_bytes INTEGER NOT NULL,
-                retry_count INTEGER NOT NULL,
-                last_error TEXT NOT NULL,
-                next_retry_at_wall_millis INTEGER NOT NULL
-            )
-            """.trimIndent()
-        )
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_upload_queue_retry ON upload_queue(next_retry_at_wall_millis, created_at)")
+        createQueueTable(db)
+        createUploadHistoryTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            createUploadHistoryTable(db)
+            return
+        }
         db.execSQL("DROP TABLE IF EXISTS upload_queue")
+        db.execSQL("DROP TABLE IF EXISTS upload_history")
         onCreate(db)
     }
 
@@ -110,6 +103,83 @@ class QueueMetadataStore(context: Context) : SQLiteOpenHelper(
         return cursor.use { if (it.moveToFirst()) it.getLong(0) else 0L }
     }
 
+    fun recordUploadHistory(entry: UploadHistoryEntry) {
+        writableDatabase.insert(
+            "upload_history",
+            null,
+            ContentValues().apply {
+                put("file_name", entry.fileName)
+                put("batch_id", entry.batchId)
+                put("uploaded_at_wall_millis", entry.uploadedAtWallMillis)
+                put("size_bytes", entry.sizeBytes)
+                put("status", entry.status)
+                put("server_message", entry.serverMessage.take(240))
+            }
+        )
+        writableDatabase.execSQL(
+            """
+            DELETE FROM upload_history
+            WHERE id NOT IN (
+              SELECT id FROM upload_history
+              ORDER BY uploaded_at_wall_millis DESC, id DESC
+              LIMIT $HISTORY_LIMIT
+            )
+            """.trimIndent()
+        )
+    }
+
+    fun uploadHistory(limit: Int = 50): List<UploadHistoryEntry> {
+        val cursor = readableDatabase.query(
+            "upload_history",
+            null,
+            null,
+            null,
+            null,
+            null,
+            "uploaded_at_wall_millis DESC, id DESC",
+            limit.coerceIn(1, HISTORY_LIMIT).toString()
+        )
+        return cursor.use {
+            buildList {
+                while (it.moveToNext()) add(it.toUploadHistoryEntry())
+            }
+        }
+    }
+
+    private fun createQueueTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS upload_queue (
+                file_name TEXT PRIMARY KEY NOT NULL,
+                batch_id TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                retry_count INTEGER NOT NULL,
+                last_error TEXT NOT NULL,
+                next_retry_at_wall_millis INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_upload_queue_retry ON upload_queue(next_retry_at_wall_millis, created_at)")
+    }
+
+    private fun createUploadHistoryTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS upload_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_name TEXT NOT NULL,
+                batch_id TEXT NOT NULL,
+                uploaded_at_wall_millis INTEGER NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                server_message TEXT NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_upload_history_time ON upload_history(uploaded_at_wall_millis DESC, id DESC)")
+    }
+
     private fun android.database.Cursor.toMetadata(): QueueMetadata = QueueMetadata(
         fileName = getString(getColumnIndexOrThrow("file_name")),
         batchId = getString(getColumnIndexOrThrow("batch_id")),
@@ -120,8 +190,18 @@ class QueueMetadataStore(context: Context) : SQLiteOpenHelper(
         nextRetryAtWallMillis = getLong(getColumnIndexOrThrow("next_retry_at_wall_millis"))
     )
 
+    private fun android.database.Cursor.toUploadHistoryEntry(): UploadHistoryEntry = UploadHistoryEntry(
+        fileName = getString(getColumnIndexOrThrow("file_name")),
+        batchId = getString(getColumnIndexOrThrow("batch_id")),
+        uploadedAtWallMillis = getLong(getColumnIndexOrThrow("uploaded_at_wall_millis")),
+        sizeBytes = getLong(getColumnIndexOrThrow("size_bytes")),
+        status = getString(getColumnIndexOrThrow("status")),
+        serverMessage = getString(getColumnIndexOrThrow("server_message"))
+    )
+
     companion object {
         private const val DATABASE_NAME = "upload_queue.db"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
+        private const val HISTORY_LIMIT = 100
     }
 }

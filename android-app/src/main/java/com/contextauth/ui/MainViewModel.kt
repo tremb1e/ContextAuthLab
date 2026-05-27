@@ -33,7 +33,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun checkRules(apply: Boolean = false) = coordinator.checkRules(viewModelScope, apply)
     fun setBatchSeconds(value: Int) = coordinator.setBatchSeconds(value)
     fun setTaskSeconds(value: Int) = coordinator.setTaskSeconds(value)
-    fun setAllowThirdParty(value: Boolean) = coordinator.setAllowThirdParty(value)
     fun setWifiOnly(value: Boolean) = coordinator.setWifiOnly(value)
     fun clearQueue() = coordinator.clearQueue()
     fun canStart() = coordinator.canStart()

@@ -33,9 +33,17 @@ def _positive_int_env(name: str, default: int) -> int:
     return value
 
 
+def _non_negative_int_env(name: str, default: int) -> int:
+    value = int(os.getenv(name, str(default)))
+    if value < 0:
+        raise ValueError(f"{name}_must_be_non_negative")
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
+    rules_file: Path
     study_salt_env: str | None
     rules_version: str
     ingest_require_auth: bool
@@ -48,14 +56,17 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         data_dir = Path(os.getenv("SERVER_DATA_DIR", "./data/paper")).resolve()
+        rules_file_env = os.getenv("SERVER_RULES_FILE")
+        rules_file = Path(rules_file_env).expanduser().resolve() if rules_file_env else (data_dir / "rules.json").resolve()
         log_dir = Path(os.getenv("SERVER_LOG_DIR", "./logs")).resolve()
         ntp_servers = _csv_env_values("TIME_SYNC_NTP_SERVERS") or DEFAULT_TIME_SYNC_NTP_SERVERS
         return cls(
             data_dir=data_dir,
+            rules_file=rules_file,
             study_salt_env=os.getenv("SERVER_STUDY_SALT"),
             rules_version=os.getenv("RULES_VERSION", "1"),
             ingest_require_auth=os.getenv("INGEST_REQUIRE_AUTH", "false").lower() == "true",
-            min_free_bytes=int(os.getenv("SERVER_MIN_FREE_BYTES", str(10 * 1024 * 1024))),
+            min_free_bytes=_non_negative_int_env("SERVER_MIN_FREE_BYTES", 10 * 1024 * 1024),
             log_dir=log_dir,
             time_sync_region=os.getenv("TIME_SYNC_REGION", DEFAULT_TIME_SYNC_REGION),
             time_sync_ntp_servers=ntp_servers,

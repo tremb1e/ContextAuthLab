@@ -20,6 +20,7 @@ class PayloadEnvelopeTest {
         val batch = Batch(
             batchId = UUID.randomUUID().toString(),
             deviceId = "a".repeat(64),
+            sessionId = UUID.randomUUID().toString(),
             collectionSource = CollectionSource.THIRD_PARTY_APP,
             taskCategory = null,
             taskSessionId = null,
@@ -29,6 +30,7 @@ class PayloadEnvelopeTest {
             endedAtWallMillis = 6000,
             baseElapsedNanos = 123,
             sensorSamples = listOf(SensorSample("ACCELEROMETER", 1, 1000, 0.1f, 0.2f, 9.8f, 3)),
+            touchEvents = emptyList(),
             contextEvents = emptyList(),
             contextFeatures = emptyList(),
             skipEvents = emptyList()

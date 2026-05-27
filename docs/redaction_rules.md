@@ -12,10 +12,12 @@ Default client-side safety logic:
 - Chinese ID-number-like string: `<ID_NUM>`.
 - Token-like long random/base64/hex strings: `<TOKEN>`.
 - Over-length text: `<LONG_TEXT_DROPPED>`.
-- Sensitive packages such as dialer, contacts, SMS, banking, payment, medical, password manager, and private messaging: skip event.
-- Ordinary visible UI text that does not match a specific placeholder rule: `<TEXT_REDACTED>`.
+- Non-editable visible UI component text is retained after fixed-format sensitive replacements, so button labels and other UI semantics remain available.
+- `contentDescription` and window-title text continue to use redacted placeholder fields.
 
-The current server rule payload ships schema-backed default frontend UI redaction rules and a package blocklist. These rules mirror the built-in baseline so clients can refresh policy and rule lineage from `/api/v1/rules` without weakening on-device safety.
+Package-level skip/blocklist behavior has been removed. Android no longer drops entire apps based on package name; every foreground app's accessible UI is collected and then redacted on device.
+
+The server rule payload lives in an independent JSON file. `SERVER_RULES_FILE` defaults to `${SERVER_DATA_DIR}/rules.json`; if missing, the server materializes it from `server/app/default_rules.json` on startup and then initializes active rules from that file. These rules mirror the built-in baseline so clients can refresh policy and rule lineage from `/api/v1/rules` without weakening on-device safety.
 
 The remote payload carries explicit policy metadata:
 
@@ -23,8 +25,8 @@ The remote payload carries explicit policy metadata:
 - `default_text_action`: `REDACT`.
 - `rule_hash`: SHA-256 over the rule payload excluding `rule_hash`.
 - `rules`: default text rules for email, China mobile number, URL, China ID-like number, payment-card-like number, token-like strings, and long numbers.
-- `package_blocklist`: default package-name fragments for dialer, contacts, SMS, banking, payment, medical, password manager, and private messaging apps.
+- `package_blocklist`: retained as an empty compatibility field; Android ignores package-name skip rules.
 
-Server does not rely on server-side redaction as primary protection. It quarantines batches that still contain obvious fixed-format sensitive strings or prose inside fields named `text_redacted`, `content_desc_redacted`, or `window_title_redacted`.
+Android treats remote rules as extensions rather than a hard dependency. Missing or mismatched `rule_hash` values, a failed rules request, or an invalid regex do not stop collection. Invalid regex entries are skipped, package-name targets are ignored, `content_description` rules apply only to content descriptions, and built-in baseline redaction remains active.
 
-Server also rejects batches that claim raw Accessibility/UI fields instead of the redacted/hash fields expected by the schema. Exact raw field keys such as `text`, `contentDescription`, `content_description`, `package_name`, `view_id`, `viewIdResourceName`, and `window_title` are quarantined before storage. Batches must report `diagnostics.redaction_applied: true`.
+Server does not rely on server-side redaction as primary protection and no longer performs the former secondary sensitive-string/prose/raw-field scan. It validates schema-level safety: editable nodes must not contain raw `text`, password nodes must be absent, and batches must report `diagnostics.redaction_applied: true`.

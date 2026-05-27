@@ -28,4 +28,15 @@ class LocalizationTest {
             Locale.setDefault(previous)
         }
     }
+
+    @Test
+    fun allEightTaskCategoriesHaveBilingualLabels() {
+        assertEquals(8, TaskCategory.entries.size)
+        TaskCategory.entries.forEach { task ->
+            assertTrue(task.taskName.isNotBlank())
+            assertTrue(task.intuitiveDescription.isNotBlank())
+            assertTrue(task.taskNameEn.isNotBlank())
+            assertTrue(task.intuitiveDescriptionEn.isNotBlank())
+        }
+    }
 }

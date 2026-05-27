@@ -1,208 +1,84 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
-import re
+from pathlib import Path
 from typing import Any
 
-from .config import SETTINGS
+from .config import SETTINGS, Settings
 from .schemas import RulesResponse
 
 
-DEFAULT_UI_REDACTION_RULES: list[dict[str, Any]] = [
-    {
-        "id": "email",
-        "target": "text",
-        "action": "REDACT",
-        "pattern": r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
-        "replacement": "<EMAIL>",
-        "description": "Email addresses in visible UI text/content descriptions.",
-    },
-    {
-        "id": "phone_cn",
-        "target": "text",
-        "action": "REDACT",
-        "pattern": r"(?<!\d)(?:\+?86[-\s]?)?1[3-9]\d{9}(?!\d)",
-        "replacement": "<PHONE>",
-        "description": "Mainland China mobile phone numbers.",
-    },
-    {
-        "id": "url",
-        "target": "text",
-        "action": "REDACT",
-        "pattern": r"\b(?:https?://|www\.)[^\s<>\"']+",
-        "replacement": "<URL>",
-        "description": "HTTP(S) and www URLs.",
-    },
-    {
-        "id": "id_number_cn",
-        "target": "text",
-        "action": "REDACT",
-        "pattern": r"(?<![\w-])(?:\d{15}|\d{17}[\dXx])(?![\w-])",
-        "replacement": "<ID_NUM>",
-        "description": "Chinese resident ID-like numbers.",
-    },
-    {
-        "id": "payment_card",
-        "target": "text",
-        "action": "REDACT",
-        "pattern": r"(?<![\w-])(?:\d[ -]?){13,19}(?![\w-])",
-        "replacement": "<CARD>",
-        "description": "Payment-card-like digit groups.",
-    },
-    {
-        "id": "opaque_token",
-        "target": "text",
-        "action": "REDACT",
-        "pattern": r"\b(?:[A-Fa-f0-9]{24,}|[A-Za-z0-9+/=_-]{32,})\b",
-        "replacement": "<TOKEN>",
-        "description": "Long opaque identifiers, hashes, and token-like strings.",
-    },
-    {
-        "id": "long_number",
-        "target": "text",
-        "action": "REDACT",
-        "pattern": r"(?<!\d)\d{4,}(?!\d)",
-        "replacement": "<NUM>",
-        "description": "Long numeric strings that may be identifiers or codes.",
-    },
-]
-
-DEFAULT_PACKAGE_BLOCKLIST = [
-    "dialer",
-    "contacts",
-    "sms",
-    "bank",
-    "pay",
-    "medical",
-    "password",
-    "signal",
-    "telegram",
-    "whatsapp",
-    "wechat",
-]
+PACKAGED_RULES_PATH = Path(__file__).with_name("default_rules.json")
+ZERO_RULE_HASH = "0" * 64
 
 
-DEFAULT_RULES: dict[str, Any] = {
-    "version": SETTINGS.rules_version,
-    "updated_at": "2026-05-21T00:00:00Z",
-    "rules": DEFAULT_UI_REDACTION_RULES,
-    "package_blocklist": DEFAULT_PACKAGE_BLOCKLIST,
-    "max_text_length": 128,
-    "default_text_action": "REDACT",
-}
+def _read_rules_file(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid_rules_json:{path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("rules_file_must_contain_json_object")
+    return payload
 
 
-EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
-PHONE_RE = re.compile(r"(?<!\d)(?:\+?86[-\s]?)?1[3-9]\d{9}(?!\d)")
-URL_RE = re.compile(r"\b(?:https?://|www\.)[^\s<>\"']+", re.IGNORECASE)
-CARD_RE = re.compile(r"(?<![\w-])(?:\d[ -]?){13,19}(?![\w-])")
-ID_NUM_RE = re.compile(r"(?<![\w-])(?:\d{15}|\d{17}[\dXx])(?![\w-])")
-RAW_ACCESSIBILITY_FIELD_KEYS = {
-    "content_desc",
-    "contentdescription",
-    "content_description",
-    "packagename",
-    "package_name",
-    "rawtext",
-    "raw_text",
-    "resource_id",
-    "text",
-    "viewid",
-    "view_id",
-    "viewidresourcename",
-    "view_id_resource_name",
-    "windowtitle",
-    "window_title",
-}
-UI_REDACTED_FIELD_KEYS = {
-    "content_desc_redacted",
-    "content_description_redacted",
-    "text_redacted",
-    "window_title_redacted",
-}
-PLACEHOLDER_ONLY_RE = re.compile(r"^(?:<[^<>\s]{2,64}>\s*)+$")
+def _validated_rules_payload(payload: dict[str, Any], fallback_version: str) -> dict[str, Any]:
+    normalized = dict(payload)
+    # The stored rules file is the editable policy source. The response hash is
+    # computed at runtime so it cannot drift from file contents.
+    normalized.pop("rule_hash", None)
+    if not str(normalized.get("version", "")).strip():
+        normalized["version"] = fallback_version
+    model_input = dict(normalized)
+    model_input["rule_hash"] = ZERO_RULE_HASH
+    return RulesResponse.model_validate(model_input).model_dump(exclude={"rule_hash"})
+
+
+def _write_rules_file(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _packaged_rules_payload(fallback_version: str = SETTINGS.rules_version) -> dict[str, Any]:
+    return _validated_rules_payload(_read_rules_file(PACKAGED_RULES_PATH), fallback_version)
+
+
+def ensure_rules_file(settings: Settings = SETTINGS) -> Path:
+    if settings.rules_file.exists():
+        return settings.rules_file
+    payload = _packaged_rules_payload(settings.rules_version)
+    payload["version"] = settings.rules_version
+    _write_rules_file(settings.rules_file, payload)
+    return settings.rules_file
+
+
+def load_rules(settings: Settings = SETTINGS) -> dict[str, Any]:
+    rules_path = ensure_rules_file(settings)
+    return _validated_rules_payload(_read_rules_file(rules_path), settings.rules_version)
+
+
+DEFAULT_RULES: dict[str, Any] = _packaged_rules_payload()
+DEFAULT_UI_REDACTION_RULES: list[dict[str, Any]] = copy.deepcopy(DEFAULT_RULES["rules"])
+DEFAULT_PACKAGE_BLOCKLIST: list[str] = list(DEFAULT_RULES["package_blocklist"])
+ACTIVE_RULES: dict[str, Any] = load_rules()
+
+
+def active_rules_payload() -> dict[str, Any]:
+    return copy.deepcopy(ACTIVE_RULES)
+
+
+def active_rules_version() -> str:
+    return str(ACTIVE_RULES["version"])
 
 
 def rule_hash(rules: dict[str, Any] | None = None) -> str:
-    payload = json.dumps(rules or DEFAULT_RULES, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    payload = json.dumps(rules if rules is not None else ACTIVE_RULES, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def rules_response() -> RulesResponse:
-    payload = dict(DEFAULT_RULES)
+    payload = active_rules_payload()
     payload["rule_hash"] = rule_hash(payload)
     return RulesResponse.model_validate(payload)
-
-
-def find_forbidden_raw_ui_field(value: Any) -> str | None:
-    """Reject raw Accessibility/UI fields that must be hashed or redacted client-side."""
-    if isinstance(value, dict):
-        for key, child in value.items():
-            normalized_key = str(key).strip()
-            if normalized_key in RAW_ACCESSIBILITY_FIELD_KEYS:
-                return f"raw_accessibility_field:{normalized_key}"
-            lowered_key = normalized_key.lower()
-            if lowered_key in RAW_ACCESSIBILITY_FIELD_KEYS:
-                return f"raw_accessibility_field:{normalized_key}"
-            found = find_forbidden_raw_ui_field(child)
-            if found:
-                return found
-    elif isinstance(value, list):
-        for child in value:
-            found = find_forbidden_raw_ui_field(child)
-            if found:
-                return found
-    return None
-
-
-def find_unredacted_ui_text_field(value: Any) -> str | None:
-    """Reject UI content fields that are marked redacted but still carry prose."""
-    if isinstance(value, dict):
-        for key, child in value.items():
-            normalized_key = str(key).strip()
-            lowered_key = normalized_key.lower()
-            if lowered_key in UI_REDACTED_FIELD_KEYS and isinstance(child, str):
-                if child and not PLACEHOLDER_ONLY_RE.fullmatch(child.strip()):
-                    return f"unredacted_ui_text:{normalized_key}"
-            found = find_unredacted_ui_text_field(child)
-            if found:
-                return found
-    elif isinstance(value, list):
-        for child in value:
-            found = find_unredacted_ui_text_field(child)
-            if found:
-                return found
-    return None
-
-
-def find_unredacted_sensitive_text(value: Any) -> str | None:
-    """Second-line server check after client-side redaction.
-
-    It recursively scans JSON values and returns a coarse reason only.
-    Raw text is never returned to callers or logs.
-    """
-    if isinstance(value, dict):
-        for child in value.values():
-            found = find_unredacted_sensitive_text(child)
-            if found:
-                return found
-    elif isinstance(value, list):
-        for child in value:
-            found = find_unredacted_sensitive_text(child)
-            if found:
-                return found
-    elif isinstance(value, str):
-        if EMAIL_RE.search(value):
-            return "unredacted_email"
-        if URL_RE.search(value):
-            return "unredacted_url"
-        if ID_NUM_RE.search(value):
-            return "unredacted_id_number"
-        if CARD_RE.search(value):
-            digits = re.sub(r"\D", "", CARD_RE.search(value).group(0))
-            if len(digits) >= 13:
-                return "unredacted_card"
-        if PHONE_RE.search(value):
-            return "unredacted_phone"
-    return None

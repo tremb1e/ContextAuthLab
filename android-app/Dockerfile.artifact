@@ -1,0 +1,8 @@
+FROM scratch
+
+LABEL org.opencontainers.image.title="ContextAuthLab Android debug APK"
+LABEL org.opencontainers.image.description="Artifact image containing the debug APK at /artifacts/contextauthlab-debug.apk"
+
+COPY build/outputs/apk/debug/android-app-debug.apk /artifacts/contextauthlab-debug.apk
+
+CMD ["/artifacts/contextauthlab-debug.apk"]

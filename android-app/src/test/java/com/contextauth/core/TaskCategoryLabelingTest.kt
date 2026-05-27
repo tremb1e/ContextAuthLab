@@ -11,6 +11,7 @@ class TaskCategoryLabelingTest {
         val batch = Batch(
             batchId = UUID.randomUUID().toString(),
             deviceId = "a".repeat(64),
+            sessionId = sessionId,
             collectionSource = CollectionSource.BUILTIN_TASK,
             taskCategory = TaskCategory.C4,
             taskSessionId = sessionId,
@@ -20,6 +21,7 @@ class TaskCategoryLabelingTest {
             endedAtWallMillis = 6_000,
             baseElapsedNanos = 123,
             sensorSamples = emptyList(),
+            touchEvents = emptyList(),
             contextEvents = emptyList(),
             contextFeatures = emptyList(),
             skipEvents = emptyList()
@@ -29,8 +31,9 @@ class TaskCategoryLabelingTest {
         assertTrue(json.contains("\"collection_source\":\"BUILTIN_TASK\""))
         assertTrue(json.contains("\"task_sequence\":4"))
         assertTrue(json.contains("\"task_id\":\"C4\""))
-        assertTrue(json.contains("\"task_name\":\"模拟手机设置\""))
-        assertTrue(json.contains("\"task_intuitive_description\":\"多控件操作\""))
+        assertTrue(json.contains("\"session_id\":\"$sessionId\""))
+        assertTrue(json.contains("\"task_name\":\"Simulated phone settings\""))
+        assertTrue(json.contains("\"task_intuitive_description\":\"Multi-control operation\""))
         assertTrue(json.contains("\"task_category\":\"C4\""))
         assertTrue(json.contains("\"task_session_id\":\"$sessionId\""))
         assertTrue(json.contains("\"task_elapsed_seconds_at_batch_end\":5"))
@@ -41,6 +44,7 @@ class TaskCategoryLabelingTest {
         val batch = Batch(
             batchId = UUID.randomUUID().toString(),
             deviceId = "a".repeat(64),
+            sessionId = UUID.randomUUID().toString(),
             collectionSource = CollectionSource.THIRD_PARTY_APP,
             taskCategory = null,
             taskSessionId = null,
@@ -50,6 +54,7 @@ class TaskCategoryLabelingTest {
             endedAtWallMillis = 6_000,
             baseElapsedNanos = 123,
             sensorSamples = emptyList(),
+            touchEvents = emptyList(),
             contextEvents = emptyList(),
             contextFeatures = emptyList(),
             skipEvents = emptyList()

@@ -58,3 +58,19 @@ def test_time_sync_rtt_limit_must_be_positive(monkeypatch) -> None:
     finally:
         monkeypatch.delenv("TIME_SYNC_MAX_ACCEPTABLE_RTT_MILLIS", raising=False)
         importlib.reload(config)
+
+
+def test_min_free_bytes_must_not_be_negative(monkeypatch) -> None:
+    monkeypatch.setenv("SERVER_MIN_FREE_BYTES", "-1")
+
+    import app.config as config
+
+    try:
+        importlib.reload(config)
+    except ValueError as exc:
+        assert str(exc) == "SERVER_MIN_FREE_BYTES_must_be_non_negative"
+    else:
+        raise AssertionError("expected SERVER_MIN_FREE_BYTES validation error")
+    finally:
+        monkeypatch.delenv("SERVER_MIN_FREE_BYTES", raising=False)
+        importlib.reload(config)

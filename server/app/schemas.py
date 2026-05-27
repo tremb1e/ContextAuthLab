@@ -16,6 +16,7 @@ TASK_CATEGORIES = {
     "C4",
     "C5",
     "C6",
+    "C7",
 }
 
 
@@ -42,7 +43,7 @@ class UiRedactionRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
-    target: Literal["text", "content_description", "package_name", "node"]
+    target: Literal["text", "content_description", "node"]
     action: Literal["REDACT", "DROP", "ALLOW"]
     pattern: str | None = None
     replacement: str | None = None
@@ -129,10 +130,8 @@ class NodeSnapshot(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     node_id: str
-    package_name_hash: str | None = None
-    package_category: str | None = None
     class_name: str | None = None
-    view_id_hash: str | None = None
+    viewIdResourceName: str | None = None
     bounds_grid: BoundsGrid | None = None
     clickable: bool = False
     editable: bool = False
@@ -142,9 +141,12 @@ class NodeSnapshot(BaseModel):
     enabled: bool = True
     focused: bool = False
     selected: bool = False
+    visible_to_user: bool = True
+    long_clickable: bool = False
     password: bool = False
     input_type_category: str | None = None
     child_count: int = 0
+    text: str | None = None
     text_redacted: str | None = None
     content_desc_redacted: str | None = None
     actions_summary: list[str] = Field(default_factory=list)
@@ -154,6 +156,8 @@ class NodeSnapshot(BaseModel):
     def reject_password_nodes(self) -> "NodeSnapshot":
         if self.password:
             raise ValueError("password_node_must_be_dropped")
+        if self.editable and self.text not in {None, "", "<EDITABLE_TEXT_DROPPED>"}:
+            raise ValueError("editable_text_must_be_dropped")
         return self
 
 
@@ -161,12 +165,30 @@ class SensorSample(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     sensor_type: Literal["ACCELEROMETER", "GYROSCOPE", "MAGNETIC_FIELD"]
-    timestamp_elapsed_nanos: int
-    wall_time_estimated_millis: int
+    timestamp_elapsed_nanos: int = Field(ge=0)
+    wall_time_estimated_millis: int = Field(ge=0)
     x: float
     y: float
     z: float
     accuracy: int | None = None
+
+
+class TouchEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str
+    event_type: Literal[
+        "TOUCH_INTERACTION_START",
+        "TOUCH_INTERACTION_END",
+        "TOUCH_DOWN",
+        "TOUCH_UP",
+        "TOUCH_POINTER_DOWN",
+        "TOUCH_POINTER_UP",
+        "TOUCH_CANCEL",
+    ]
+    event_time_uptime_millis: int = Field(ge=0)
+    event_time_wall_millis: int = Field(ge=0)
+    collected_at_wall_millis: int = Field(ge=0)
 
 
 class ContextEvent(BaseModel):
@@ -174,8 +196,12 @@ class ContextEvent(BaseModel):
 
     event_id: str
     event_type: str
-    event_time_wall_millis: int
-    package_name_hash: str | None = None
+    event_time_wall_millis: int = Field(ge=0)
+    app_package_name: str | None = None
+    foreground_activity_class_name: str | None = None
+    foreground_component_name: str | None = None
+    input_method_visible: bool = False
+    coarse_orientation: Literal["portrait", "landscape", "portrait_reverse", "landscape_reverse", "unknown"] = "unknown"
     window_title_redacted: str | None = None
     root_nodes: list[NodeSnapshot] = Field(default_factory=list)
     redaction_summary: dict[str, int] = Field(default_factory=dict)
@@ -186,7 +212,7 @@ class ContextFeature(BaseModel):
 
     feature_id: str
     event_id: str
-    computed_at_wall_millis: int
+    computed_at_wall_millis: int = Field(ge=0)
     collection_source: Literal["BUILTIN_TASK", "THIRD_PARTY_APP"]
     task_sequence: int | None = None
     task_id: str | None = None
@@ -194,6 +220,7 @@ class ContextFeature(BaseModel):
     task_intuitive_description: str | None = None
     task_category: str | None = None
     task_session_id: str | None = None
+    input_method_visible: bool = False
     keyboard_visible_estimated: bool | None = None
     editable_count: int = 0
     scrollable_count: int = 0
@@ -205,7 +232,7 @@ class ContextFeature(BaseModel):
     game_like_score: float = 0.0
     node_class_histogram: dict[str, int] = Field(default_factory=dict)
     event_type: str | None = None
-    coarse_orientation: str | None = None
+    coarse_orientation: Literal["portrait", "landscape", "portrait_reverse", "landscape_reverse", "unknown"] | None = None
     estimated_context_category: str = "UNKNOWN"
 
     @model_validator(mode="after")
@@ -220,6 +247,7 @@ class BatchDiagnostics(BaseModel):
 
     sensor_sample_count: int = 0
     context_event_count: int = 0
+    touch_event_count: int = 0
     redaction_applied: Literal[True]
     compression: Literal["lz4_frame"]
     encryption: Literal["none"]
@@ -231,12 +259,14 @@ class Batch(BaseModel):
 
     batch_id: str
     device_id: str
-    session_id: str | None = None
+    session_id: str = Field(min_length=1)
     record_type: Literal["collection"]
     collection_source: Literal["BUILTIN_TASK", "THIRD_PARTY_APP"]
     app_package_name: str
-    sampling_rate_hz: int
-    batch_duration_seconds: int
+    foreground_activity_class_name: str | None = None
+    foreground_component_name: str | None = None
+    sampling_rate_hz: int = Field(gt=0)
+    batch_duration_seconds: int = Field(ge=0)
     task_sequence: int | None = None
     task_id: str | None = None
     task_name: str | None = None
@@ -249,10 +279,11 @@ class Batch(BaseModel):
     rule_version: str
     rule_hash: str
     consent_version: str
-    started_at_wall_millis: int
-    ended_at_wall_millis: int
-    base_elapsed_nanos: int
+    started_at_wall_millis: int = Field(ge=0)
+    ended_at_wall_millis: int = Field(ge=0)
+    base_elapsed_nanos: int = Field(ge=0)
     sensor_samples: list[SensorSample] = Field(default_factory=list)
+    touch_events: list[TouchEvent] = Field(default_factory=list)
     context_events: list[ContextEvent] = Field(default_factory=list)
     context_features: list[ContextFeature] = Field(default_factory=list)
     skip_events: list[dict[str, Any]] = Field(default_factory=list)
@@ -277,6 +308,8 @@ class Batch(BaseModel):
 
     @model_validator(mode="after")
     def validate_task_label_contract(self) -> "Batch":
+        if self.started_at_wall_millis > self.ended_at_wall_millis:
+            raise ValueError("batch_started_after_ended")
         if self.collection_source == "BUILTIN_TASK":
             missing = [
                 self.task_id,

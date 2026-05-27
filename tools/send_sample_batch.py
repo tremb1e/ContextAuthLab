@@ -23,16 +23,18 @@ TASK_CATEGORIES = [
     "C4",
     "C5",
     "C6",
+    "C7",
 ]
 
 TASK_META = {
-    "C0": ("静置计时", "持机静止"),
-    "C1": ("研究协议阅读", "静态阅读"),
-    "C2": ("研究咨询流", "单指滑动信息流"),
-    "C3": ("段落抄写", "文本输入"),
-    "C4": ("模拟手机设置", "多控件操作"),
-    "C5": ("倾斜迷宫", "主动倾斜操作"),
-    "C6": ("手腕转动", "显式转腕挑战"),
+    "C0": ("Still timer", "Quiet hold"),
+    "C1": ("Research protocol reading", "Static reading"),
+    "C2": ("Research information feed", "Single-finger feed"),
+    "C3": ("Paragraph copy", "Text entry"),
+    "C4": ("Simulated phone settings", "Multi-control operation"),
+    "C5": ("Blue ball tapping", "Landscape touch challenge"),
+    "C6": ("Local video playback", "Video watching"),
+    "C7": ("Wrist rotation", "Explicit wrist rotation"),
 }
 
 
@@ -53,6 +55,7 @@ def make_batch(
     device_id: str,
     task_category: str | None,
     index: int,
+    session_id: str,
     task_session_id: str | None,
     task_started_at: int | None,
 ) -> dict[str, Any]:
@@ -63,10 +66,12 @@ def make_batch(
     return {
         "batch_id": batch_id,
         "device_id": device_id,
-        "session_id": task_session_id if is_builtin else None,
+        "session_id": task_session_id if is_builtin else session_id,
         "record_type": "collection",
         "collection_source": "BUILTIN_TASK" if is_builtin else "THIRD_PARTY_APP",
-        "app_package_name": "com.contextauth",
+        "app_package_name": "com.example.target",
+        "foreground_activity_class_name": "com.example.target.MainActivity",
+        "foreground_component_name": "com.example.target/.MainActivity",
         "sampling_rate_hz": 100,
         "batch_duration_seconds": 5,
         "task_sequence": int(task_category[1:]) if is_builtin else None,
@@ -95,14 +100,50 @@ def make_batch(
                 "accuracy": 3,
             }
         ],
+        "touch_events": [
+            {
+                "event_id": str(uuid.uuid4()),
+                "event_type": "TOUCH_INTERACTION_START",
+                "event_time_uptime_millis": 123456790 + index,
+                "event_time_wall_millis": now - 4300,
+                "collected_at_wall_millis": now - 4299,
+            },
+            {
+                "event_id": str(uuid.uuid4()),
+                "event_type": "TOUCH_INTERACTION_END",
+                "event_time_uptime_millis": 123456890 + index,
+                "event_time_wall_millis": now - 4200,
+                "collected_at_wall_millis": now - 4199,
+            },
+        ],
         "context_events": [
             {
                 "event_id": str(uuid.uuid4()),
                 "event_type": "TYPE_WINDOW_CONTENT_CHANGED",
                 "event_time_wall_millis": now - 4000,
-                "package_name_hash": "c" * 64,
+                "app_package_name": "com.example.target",
+                "foreground_activity_class_name": "com.example.target.MainActivity",
+                "foreground_component_name": "com.example.target/.MainActivity",
+                "input_method_visible": False,
+                "coarse_orientation": "portrait",
                 "window_title_redacted": "<DROPPED>",
-                "root_nodes": [],
+                "root_nodes": [
+                    {
+                        "node_id": "node-1",
+                        "class_name": "android.widget.Button",
+                        "viewIdResourceName": "com.example.target:id/confirm",
+                        "text": "确认",
+                        "text_redacted": None,
+                        "content_desc_redacted": None,
+                        "clickable": True,
+                        "editable": False,
+                        "scrollable": False,
+                        "password": False,
+                        "child_count": 0,
+                        "actions_summary": ["CLICK"],
+                        "depth": 0,
+                    }
+                ],
                 "redaction_summary": {
                     "dropped_password_nodes": 0,
                     "dropped_editable_texts": 0,
@@ -127,6 +168,7 @@ def make_batch(
                 "task_intuitive_description": task_intuition if is_builtin else None,
                 "task_category": task_category,
                 "task_session_id": task_session_id if is_builtin else None,
+                "input_method_visible": False,
                 "keyboard_visible_estimated": False,
                 "editable_count": 0,
                 "scrollable_count": 0,
@@ -146,6 +188,7 @@ def make_batch(
         "diagnostics": {
             "sensor_sample_count": 1,
             "context_event_count": 1,
+            "touch_event_count": 2,
             "redaction_applied": True,
             "compression": "lz4_frame",
             "encryption": "none",
@@ -200,11 +243,12 @@ def main() -> None:
     fake_android_id = f"contextauthlab-fake-android-id-{args.device_suffix}-{args.seed}"
     device_id = args.device_id or compute_device_id(config["serverStudySalt"], fake_android_id)
     task_session_id = str(uuid.uuid4()) if task_category is not None else None
+    session_id = task_session_id or str(uuid.uuid4())
     task_started_at = int(time.time() * 1000) if task_category is not None else None
 
     responses = []
     for index in range(args.count):
-        batch = make_batch(device_id, task_category, index, task_session_id, task_started_at)
+        batch = make_batch(device_id, task_category, index, session_id, task_session_id, task_started_at)
         responses.append(post_json(args.server, envelope_for(batch)))
         if args.interval > 0 and index < args.count - 1:
             time.sleep(args.interval)

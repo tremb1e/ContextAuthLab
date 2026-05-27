@@ -15,7 +15,9 @@ from send_sample_batch import TASK_CATEGORIES, envelope_for, make_batch
 
 
 async def post_batch(client: httpx.AsyncClient, server: str, device_id: str, category: str, index: int) -> float:
-    batch = make_batch(device_id, category, index, f"load-{device_id}-{category}", int(time.time() * 1000))
+    session_id = f"load-{device_id}-{category}"
+    task_started_at = int(time.time() * 1000)
+    batch = make_batch(device_id, category, index, session_id, session_id, task_started_at)
     started = time.perf_counter()
     response = await client.post(server.rstrip("/") + "/api/v1/ingest", json=envelope_for(batch), timeout=10)
     response.raise_for_status()

@@ -24,32 +24,36 @@ def sample_batch(
 ) -> dict[str, Any]:
     batch_uuid = batch_id or str(uuid.uuid4())
     task_meta = {
-        "C0": ("静置计时", "持机静止"),
-        "C1": ("研究协议阅读", "静态阅读"),
-        "C2": ("研究咨询流", "单指滑动信息流"),
-        "C3": ("段落抄写", "文本输入"),
-        "C4": ("模拟手机设置", "多控件操作"),
-        "C5": ("倾斜迷宫", "主动倾斜操作"),
-        "C6": ("手腕转动", "显式转腕挑战"),
+        "C0": ("Still timer", "Quiet hold"),
+        "C1": ("Research protocol reading", "Static reading"),
+        "C2": ("Research information feed", "Single-finger feed"),
+        "C3": ("Paragraph copy", "Text entry"),
+        "C4": ("Simulated phone settings", "Multi-control operation"),
+        "C5": ("Blue ball tapping", "Landscape touch challenge"),
+        "C6": ("Local video playback", "Video watching"),
+        "C7": ("Wrist rotation", "Explicit wrist rotation"),
     }
     task_name, intuition = task_meta.get(task_category or "", (None, None))
+    batch_session_id = str(uuid.uuid4())
     task_fields = {
         "task_sequence": int(task_category[1:]) if collection_source == "BUILTIN_TASK" and task_category else None,
         "task_id": task_category if collection_source == "BUILTIN_TASK" else None,
         "task_name": task_name if collection_source == "BUILTIN_TASK" else None,
         "task_intuitive_description": intuition if collection_source == "BUILTIN_TASK" else None,
         "task_category": task_category if collection_source == "BUILTIN_TASK" else None,
-        "task_session_id": str(uuid.uuid4()) if collection_source == "BUILTIN_TASK" else None,
+        "task_session_id": batch_session_id if collection_source == "BUILTIN_TASK" else None,
         "task_started_at_wall_millis": 1710000000000 if collection_source == "BUILTIN_TASK" else None,
         "task_elapsed_seconds_at_batch_end": 5 if collection_source == "BUILTIN_TASK" else None,
     }
     return {
         "batch_id": batch_uuid,
         "device_id": device_id,
-        "session_id": task_fields["task_session_id"],
+        "session_id": task_fields["task_session_id"] or batch_session_id,
         "record_type": "collection",
         "collection_source": collection_source,
-        "app_package_name": "com.contextauth",
+        "app_package_name": "com.example.target",
+        "foreground_activity_class_name": "com.example.target.MainActivity",
+        "foreground_component_name": "com.example.target/.MainActivity",
         "sampling_rate_hz": 100,
         "batch_duration_seconds": 5,
         **task_fields,
@@ -71,23 +75,44 @@ def sample_batch(
                 "accuracy": 3,
             }
         ],
+        "touch_events": [
+            {
+                "event_id": str(uuid.uuid4()),
+                "event_type": "TOUCH_INTERACTION_START",
+                "event_time_uptime_millis": 123456,
+                "event_time_wall_millis": 1710000000100,
+                "collected_at_wall_millis": 1710000000101,
+            },
+            {
+                "event_id": str(uuid.uuid4()),
+                "event_type": "TOUCH_INTERACTION_END",
+                "event_time_uptime_millis": 123556,
+                "event_time_wall_millis": 1710000000200,
+                "collected_at_wall_millis": 1710000000201,
+            },
+        ],
         "context_events": [
             {
                 "event_id": str(uuid.uuid4()),
                 "event_type": "TYPE_WINDOW_CONTENT_CHANGED",
                 "event_time_wall_millis": 1710000000123,
-                "package_name_hash": "c" * 64,
+                "app_package_name": "com.example.target",
+                "foreground_activity_class_name": "com.example.target.MainActivity",
+                "foreground_component_name": "com.example.target/.MainActivity",
+                "input_method_visible": False,
+                "coarse_orientation": "portrait",
                 "window_title_redacted": "<DROPPED>",
                 "root_nodes": [
                     {
                         "node_id": "node-1",
-                        "package_name_hash": "c" * 64,
                         "class_name": "android.widget.TextView",
+                        "viewIdResourceName": "com.example.target:id/confirm",
                         "clickable": False,
                         "editable": False,
                         "scrollable": False,
                         "password": False,
                         "child_count": 0,
+                        "text": "确认",
                         "text_redacted": text_redacted,
                         "content_desc_redacted": None,
                         "actions_summary": [],
@@ -137,6 +162,7 @@ def sample_batch(
         "diagnostics": {
             "sensor_sample_count": 1,
             "context_event_count": 1,
+            "touch_event_count": 2,
             "redaction_applied": True,
             "compression": "lz4_frame",
             "encryption": "none",

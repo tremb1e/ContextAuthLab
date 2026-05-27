@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from .config import SETTINGS, get_server_study_salt
 from .integrity import decode_base64, verify_sha256
 from .logging_config import configure_logging, ingest_log
-from .rules import find_forbidden_raw_ui_field, find_unredacted_sensitive_text, find_unredacted_ui_text_field, rules_response
+from .rules import active_rules_version, rules_response
 from .schemas import Batch, ConfigResponse, Envelope, RulesResponse, TimeSyncConfig
 from .storage import STORE, now_ms
 
@@ -39,11 +39,20 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/ready")
+def ready() -> dict[str, str]:
+    try:
+        STORE.assert_ready()
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"status": "ready"}
+
+
 @app.get("/api/v1/config", response_model=ConfigResponse)
 def config() -> ConfigResponse:
     return ConfigResponse(
         server_study_salt=get_server_study_salt(SETTINGS),
-        rules_version=SETTINGS.rules_version,
+        rules_version=active_rules_version(),
         server_time_millis=now_ms(),
         time_sync=TimeSyncConfig(
             method="HTTP_MIDPOINT",
@@ -72,10 +81,17 @@ def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+def _safe_append_error(reason: str, envelope: Envelope | None, request_id: str, details: dict[str, Any] | None = None) -> None:
+    try:
+        STORE.append_error(reason, envelope, request_id, details)
+    except OSError:
+        pass
+
+
 def _reject(status_code: int, reason: str, request_id: str, envelope: Envelope | None, request: Request) -> None:
     INGEST_TOTAL.labels(result="reject").inc()
     INGEST_ERRORS_TOTAL.labels(type=reason).inc()
-    STORE.append_error(reason, envelope, request_id)
+    _safe_append_error(reason, envelope, request_id)
     ingest_log(
         "ingest_rejected",
         request_id=request_id,
@@ -88,6 +104,41 @@ def _reject(status_code: int, reason: str, request_id: str, envelope: Envelope |
         status_code=status_code,
     )
     raise HTTPException(status_code=status_code, detail=reason)
+
+
+def _quarantine_reject(
+    reason: str,
+    request_id: str,
+    envelope: Envelope,
+    plaintext_obj: dict[str, Any],
+    compressed_bytes: bytes,
+    plaintext_bytes: bytes,
+    decompress_ms: float,
+    client_ip: str | None,
+    schema_ok: bool,
+) -> None:
+    try:
+        STORE.quarantine(envelope, plaintext_obj, reason, request_id)
+    except OSError:
+        _safe_append_error(reason, envelope, request_id, {"quarantine_error": "write_failed"})
+    INGEST_TOTAL.labels(result="quarantine").inc()
+    INGEST_ERRORS_TOTAL.labels(type=reason).inc()
+    ingest_log(
+        "ingest_quarantined",
+        request_id=request_id,
+        device_id=envelope.device_id,
+        batch_id=envelope.batch_id,
+        rule_version=envelope.rule_version,
+        bytes_in=len(compressed_bytes),
+        bytes_decompressed=len(plaintext_bytes),
+        decompress_ms=decompress_ms,
+        schema_ok=schema_ok,
+        quarantined=True,
+        reject_reason=reason,
+        client_ip=client_ip,
+        status_code=400,
+    )
+    raise HTTPException(status_code=400, detail=reason)
 
 
 @app.post("/api/v1/ingest")
@@ -161,103 +212,46 @@ async def ingest(request: Request) -> dict[str, Any]:
         try:
             batch = Batch.model_validate(plaintext_obj)
         except ValidationError as exc:
-            STORE.quarantine(envelope, plaintext_obj, "schema_validation_failed", request_id)
-            INGEST_TOTAL.labels(result="quarantine").inc()
-            INGEST_ERRORS_TOTAL.labels(type="schema_validation_failed").inc()
-            ingest_log(
-                "ingest_quarantined",
-                request_id=request_id,
-                device_id=envelope.device_id,
-                batch_id=envelope.batch_id,
-                rule_version=envelope.rule_version,
-                bytes_in=len(compressed_bytes),
-                bytes_decompressed=len(plaintext_bytes),
-                decompress_ms=decompress_ms,
-                schema_ok=False,
-                quarantined=True,
-                reject_reason="schema_validation_failed",
-                client_ip=client_ip,
-                status_code=400,
-            )
-            raise HTTPException(status_code=400, detail="schema_validation_failed") from exc
+            try:
+                _quarantine_reject(
+                    "schema_validation_failed",
+                    request_id,
+                    envelope,
+                    plaintext_obj,
+                    compressed_bytes,
+                    plaintext_bytes,
+                    decompress_ms,
+                    client_ip,
+                    schema_ok=False,
+                )
+            except HTTPException as http_exc:
+                raise http_exc from exc
 
         if batch.device_id != envelope.device_id:
-            STORE.quarantine(envelope, plaintext_obj, "envelope_batch_device_id_mismatch", request_id)
-            INGEST_TOTAL.labels(result="quarantine").inc()
-            INGEST_ERRORS_TOTAL.labels(type="envelope_batch_device_id_mismatch").inc()
-            raise HTTPException(status_code=400, detail="envelope_batch_device_id_mismatch")
+            _quarantine_reject(
+                "envelope_batch_device_id_mismatch",
+                request_id,
+                envelope,
+                plaintext_obj,
+                compressed_bytes,
+                plaintext_bytes,
+                decompress_ms,
+                client_ip,
+                schema_ok=True,
+            )
 
         if batch.batch_id != envelope.batch_id:
-            STORE.quarantine(envelope, plaintext_obj, "envelope_batch_id_mismatch", request_id)
-            INGEST_TOTAL.labels(result="quarantine").inc()
-            INGEST_ERRORS_TOTAL.labels(type="envelope_batch_id_mismatch").inc()
-            raise HTTPException(status_code=400, detail="envelope_batch_id_mismatch")
-
-        raw_ui_reason = find_forbidden_raw_ui_field(plaintext_obj)
-        if raw_ui_reason:
-            STORE.quarantine(envelope, plaintext_obj, raw_ui_reason, request_id)
-            INGEST_TOTAL.labels(result="quarantine").inc()
-            INGEST_ERRORS_TOTAL.labels(type=raw_ui_reason).inc()
-            ingest_log(
-                "ingest_quarantined",
-                request_id=request_id,
-                device_id=envelope.device_id,
-                batch_id=envelope.batch_id,
-                rule_version=envelope.rule_version,
-                bytes_in=len(compressed_bytes),
-                bytes_decompressed=len(plaintext_bytes),
-                decompress_ms=decompress_ms,
+            _quarantine_reject(
+                "envelope_batch_id_mismatch",
+                request_id,
+                envelope,
+                plaintext_obj,
+                compressed_bytes,
+                plaintext_bytes,
+                decompress_ms,
+                client_ip,
                 schema_ok=True,
-                quarantined=True,
-                reject_reason=raw_ui_reason,
-                client_ip=client_ip,
-                status_code=400,
             )
-            raise HTTPException(status_code=400, detail=raw_ui_reason)
-
-        sensitive_reason = find_unredacted_sensitive_text(plaintext_obj)
-        if sensitive_reason:
-            STORE.quarantine(envelope, plaintext_obj, sensitive_reason, request_id)
-            INGEST_TOTAL.labels(result="quarantine").inc()
-            INGEST_ERRORS_TOTAL.labels(type=sensitive_reason).inc()
-            ingest_log(
-                "ingest_quarantined",
-                request_id=request_id,
-                device_id=envelope.device_id,
-                batch_id=envelope.batch_id,
-                rule_version=envelope.rule_version,
-                bytes_in=len(compressed_bytes),
-                bytes_decompressed=len(plaintext_bytes),
-                decompress_ms=decompress_ms,
-                schema_ok=True,
-                quarantined=True,
-                reject_reason=sensitive_reason,
-                client_ip=client_ip,
-                status_code=400,
-            )
-            raise HTTPException(status_code=400, detail=sensitive_reason)
-
-        ui_text_reason = find_unredacted_ui_text_field(plaintext_obj)
-        if ui_text_reason:
-            STORE.quarantine(envelope, plaintext_obj, ui_text_reason, request_id)
-            INGEST_TOTAL.labels(result="quarantine").inc()
-            INGEST_ERRORS_TOTAL.labels(type=ui_text_reason).inc()
-            ingest_log(
-                "ingest_quarantined",
-                request_id=request_id,
-                device_id=envelope.device_id,
-                batch_id=envelope.batch_id,
-                rule_version=envelope.rule_version,
-                bytes_in=len(compressed_bytes),
-                bytes_decompressed=len(plaintext_bytes),
-                decompress_ms=decompress_ms,
-                schema_ok=True,
-                quarantined=True,
-                reject_reason=ui_text_reason,
-                client_ip=client_ip,
-                status_code=400,
-            )
-            raise HTTPException(status_code=400, detail=ui_text_reason)
 
         try:
             stored = STORE.store(envelope, batch, plaintext_obj, request_id, len(compressed_bytes), len(plaintext_bytes))
@@ -281,10 +275,9 @@ async def ingest(request: Request) -> dict[str, Any]:
         )
         return {
             "status": "ok",
-            "device_id": envelope.device_id,
+            "device_id_prefix": envelope.device_id[:8],
             "batch_id": envelope.batch_id,
             "stored": True,
-            "path": str(stored.batch_path),
         }
     except HTTPException:
         raise
@@ -292,7 +285,7 @@ async def ingest(request: Request) -> dict[str, Any]:
         reason = "internal_error"
         INGEST_TOTAL.labels(result="reject").inc()
         INGEST_ERRORS_TOTAL.labels(type=reason).inc()
-        STORE.append_error(reason, envelope, request_id, {"type": type(exc).__name__})
+        _safe_append_error(reason, envelope, request_id, {"type": type(exc).__name__})
         ingest_log(
             "ingest_rejected",
             request_id=request_id,
