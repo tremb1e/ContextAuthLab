@@ -11,6 +11,7 @@ class ContextFeatureExtractor {
         val editable = nodes.count { it.editable }
         val scrollable = nodes.count { it.scrollable }
         val clickable = nodes.count { it.clickable }
+        val passwordSeen = nodes.any { it.password }
         val histogram = nodes
             .mapNotNull { it.className?.substringAfterLast('.') }
             .groupingBy { it }
@@ -50,6 +51,7 @@ class ContextFeatureExtractor {
             listLikeScore = listScore,
             formLikeScore = formScore,
             gameLikeScore = gameScore,
+            passwordNodeSeen = passwordSeen,
             nodeClassHistogram = histogram,
             eventType = event.eventType,
             coarseOrientation = CoarseOrientation.normalize(event.coarseOrientation),

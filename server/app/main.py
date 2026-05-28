@@ -16,7 +16,7 @@ from .integrity import decode_base64, verify_sha256
 from .logging_config import configure_logging, ingest_log
 from .rules import active_rules_version, rules_response
 from .schemas import Batch, ConfigResponse, Envelope, RulesResponse, TimeSyncConfig
-from .storage import STORE, now_ms
+from .storage import STORE, DuplicateBatchConflict, now_ms
 
 
 configure_logging()
@@ -88,10 +88,17 @@ def _safe_append_error(reason: str, envelope: Envelope | None, request_id: str, 
         pass
 
 
-def _reject(status_code: int, reason: str, request_id: str, envelope: Envelope | None, request: Request) -> None:
+def _reject(
+    status_code: int,
+    reason: str,
+    request_id: str,
+    envelope: Envelope | None,
+    request: Request,
+    details: dict[str, Any] | None = None,
+) -> None:
     INGEST_TOTAL.labels(result="reject").inc()
     INGEST_ERRORS_TOTAL.labels(type=reason).inc()
-    _safe_append_error(reason, envelope, request_id)
+    _safe_append_error(reason, envelope, request_id, details)
     ingest_log(
         "ingest_rejected",
         request_id=request_id,
@@ -255,8 +262,11 @@ async def ingest(request: Request) -> dict[str, Any]:
 
         try:
             stored = STORE.store(envelope, batch, plaintext_obj, request_id, len(compressed_bytes), len(plaintext_bytes))
+        except DuplicateBatchConflict:
+            _reject(409, "duplicate_batch_id_conflict", request_id, envelope, request)
         except OSError as exc:
-            _reject(507, str(exc), request_id, envelope, request)
+            reason = "disk_space_below_threshold" if str(exc) == "disk_space_below_threshold" else "storage_write_failed"
+            _reject(507, reason, request_id, envelope, request, {"type": type(exc).__name__})
 
         INGEST_TOTAL.labels(result="ok").inc()
         ingest_log(

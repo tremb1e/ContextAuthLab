@@ -50,6 +50,7 @@ def test_by_category_index_created(server_client) -> None:
     assert link.exists()
     if link.is_symlink():
         assert link.resolve().exists()
+        assert not Path(link.readlink()).is_absolute()
 
 
 def test_c7_category_index_created(server_client) -> None:
@@ -58,6 +59,32 @@ def test_c7_category_index_created(server_client) -> None:
     assert response.status_code == 200
     link = _data_dir(server_client) / "devices" / DEVICE_ID / "by_category" / "C7" / "2024-03-09" / f"{batch['batch_id']}.json"
     assert link.exists()
+
+
+def test_duplicate_batch_is_idempotent_when_payload_matches(server_client) -> None:
+    batch = sample_batch()
+    env = envelope_for(batch)
+    first = server_client.post("/api/v1/ingest", json=env)
+    second = server_client.post("/api/v1/ingest", json=env)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    batches = (_data_dir(server_client) / "index" / "batches.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(batches) == 1
+
+
+def test_duplicate_batch_conflict_rejected_without_overwrite(server_client) -> None:
+    batch = sample_batch()
+    env = envelope_for(batch)
+    assert server_client.post("/api/v1/ingest", json=env).status_code == 200
+    stored_path = _data_dir(server_client) / "devices" / DEVICE_ID / "2024-03-09" / f"{batch['batch_id']}.json"
+    original_text = stored_path.read_text(encoding="utf-8")
+
+    changed = clone(batch)
+    changed["sensor_samples"][0]["x"] = 42.0
+    response = server_client.post("/api/v1/ingest", json=envelope_for(changed))
+    assert response.status_code == 409
+    assert response.json()["detail"] == "duplicate_batch_id_conflict"
+    assert stored_path.read_text(encoding="utf-8") == original_text
 
 
 def test_ingest_rejects_bad_device_id(server_client) -> None:
@@ -288,3 +315,19 @@ def test_disk_space_threshold_reject(server_client, monkeypatch) -> None:
     batch = sample_batch()
     response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
     assert response.status_code == 507
+    assert response.json()["detail"] == "disk_space_below_threshold"
+
+
+def test_storage_error_response_does_not_leak_path(server_client, monkeypatch) -> None:
+    import app.main as main
+
+    monkeypatch.setattr(main.STORE, "assert_space_available", lambda: None)
+    monkeypatch.setattr(
+        main.STORE,
+        "store",
+        lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("/data/paper/private/path")),
+    )
+    batch = sample_batch()
+    response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
+    assert response.status_code == 507
+    assert response.json()["detail"] == "storage_write_failed"

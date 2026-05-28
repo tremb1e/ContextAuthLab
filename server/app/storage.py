@@ -36,6 +36,10 @@ class StoredBatch:
     category_link: Path | None
 
 
+class DuplicateBatchConflict(OSError):
+    pass
+
+
 class DiskStore:
     def __init__(self, data_dir: Path = SETTINGS.data_dir, min_free_bytes: int = SETTINGS.min_free_bytes):
         self.data_dir = data_dir.resolve()
@@ -114,7 +118,19 @@ class DiskStore:
         batch_dir.mkdir(parents=True, exist_ok=True)
         batch_path = _safe_join(batch_dir, f"{envelope.batch_id}.json")
         meta_path = _safe_join(batch_dir, f"{envelope.batch_id}.meta.json")
-        batch_path.write_text(json.dumps(plaintext, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        batch_text = json.dumps(plaintext, ensure_ascii=False, sort_keys=True)
+        if batch_path.exists():
+            existing = batch_path.read_text(encoding="utf-8")
+            if existing != batch_text:
+                raise DuplicateBatchConflict("duplicate_batch_id_conflict")
+            return StoredBatch(
+                batch_path=batch_path,
+                meta_path=meta_path,
+                category_link=self._category_link(envelope.device_id, batch.task_category, date, envelope.batch_id)
+                    if batch.collection_source == "BUILTIN_TASK" and batch.task_category
+                    else None,
+            )
+        batch_path.write_text(batch_text, encoding="utf-8")
 
         meta = {
             "request_id": request_id,
@@ -147,18 +163,26 @@ class DiskStore:
 
         category_link = None
         if batch.collection_source == "BUILTIN_TASK" and batch.task_category:
-            category_dir = _safe_join(self.devices_dir, envelope.device_id, "by_category", batch.task_category, date)
+            category_dir = self._category_dir(envelope.device_id, batch.task_category, date)
             category_dir.mkdir(parents=True, exist_ok=True)
-            category_link = _safe_join(category_dir, f"{envelope.batch_id}.json")
+            category_link = self._category_link(envelope.device_id, batch.task_category, date, envelope.batch_id)
             if category_link.exists() or category_link.is_symlink():
                 category_link.unlink()
             try:
-                os.symlink(batch_path, category_link)
+                os.symlink(os.path.relpath(batch_path, category_dir), category_link)
             except OSError:
                 # Fall back to a tiny pointer JSON on filesystems without symlink support.
                 category_link.write_text(json.dumps({"target": str(batch_path)}, sort_keys=True), encoding="utf-8")
 
         return StoredBatch(batch_path=batch_path, meta_path=meta_path, category_link=category_link)
+
+    def _category_dir(self, device_id: str, task_category: str, date: str) -> Path:
+        return _safe_join(self.devices_dir, device_id, "by_category", task_category, date)
+
+    def _category_link(self, device_id: str, task_category: str, date: str, batch_id: str) -> Path:
+        # Do not resolve the final path here: when the link already exists,
+        # Path.resolve() follows it to the target batch outside by_category.
+        return self._category_dir(device_id, task_category, date) / f"{batch_id}.json"
 
     @staticmethod
     def _append_jsonl(path: Path, record: dict[str, Any]) -> None:

@@ -182,6 +182,7 @@ data class ContextFeature(
     val listLikeScore: Double,
     val formLikeScore: Double,
     val gameLikeScore: Double,
+    val passwordNodeSeen: Boolean,
     val nodeClassHistogram: Map<String, Int>,
     val eventType: String,
     val coarseOrientation: String,

@@ -10,7 +10,7 @@ class ConnectionTester(private val client: OkHttpClient) {
     suspend fun testHealth(serverUrl: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val request = Request.Builder()
-                .url(serverUrl.trimEnd('/') + "/health")
+                .url(serverUrl.trimEnd('/') + "/ready")
                 .get()
                 .build()
             val started = System.nanoTime()

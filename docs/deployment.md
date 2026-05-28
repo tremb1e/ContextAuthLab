@@ -24,7 +24,9 @@ The image entrypoint and compose `*-server-init` service both prepare mounted
 data/log directories for the non-root API process (UID/GID `1000:1000` by
 default). This avoids the common bind-mount failure where Docker creates host
 directories as root and the server cannot create `devices`, `index`, or
-`quarantine`.
+`quarantine`. `SERVER_FIX_PERMISSIONS=false` skips the compose init ownership
+change, and `SERVER_CHOWN_RECURSIVE=false` limits it to the top-level mounted
+paths after the first successful boot.
 
 ## Environment
 
@@ -173,11 +175,11 @@ Install on a test device:
 adb install -r artifacts/contextauthlab-debug.apk
 ```
 
-After installation, enable AccessibilityService, battery optimization exemption, and notification permission. The app starts collection automatically once required permissions, a valid research `device_id`, and screen/unlock state are ready. Server reachability, ClockSync, Wi-Fi, and rule refresh failures do not block local sampling; failed uploads are queued and replayed according to the Wi-Fi policy.
+After installation, enable AccessibilityService, battery optimization exemption, and notification permission. The app starts collection automatically once required permissions, a valid research `device_id`, and screen/unlock state are ready. Server readiness, ClockSync, Wi-Fi, and rule refresh failures do not block local sampling; failed uploads are queued and replayed according to the Wi-Fi policy.
 
 For UI verification, switch the device system language between Chinese and English and relaunch the app. Participant-facing screens, task instructions, protocol text, notification copy, settings, details, and dialogs should follow the system language.
 
-Home's `Collection Status` card shows server connectivity, automatic collection state, latest connectivity-test time, latest upload time, and latest server response. Tapping the server connection chip triggers a fresh `/health` test.
+Home's `Collection Status` card shows server connectivity, automatic collection state, latest connectivity-test time, latest upload time, and latest server response. Tapping the server connection chip triggers a fresh `/ready` readiness test so an unwritable data directory is visible before uploads fail.
 
 ## Redaction Rules File
 

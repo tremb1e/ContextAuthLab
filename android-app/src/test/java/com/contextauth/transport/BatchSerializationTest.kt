@@ -147,6 +147,62 @@ class BatchSerializationTest {
     }
 
     @Test
+    fun batchJsonPreservesPasswordNodeFlagForSchemaRejection() {
+        val batch = Batch(
+            batchId = UUID.randomUUID().toString(),
+            deviceId = "a".repeat(64),
+            sessionId = UUID.randomUUID().toString(),
+            collectionSource = CollectionSource.THIRD_PARTY_APP,
+            taskCategory = null,
+            taskSessionId = null,
+            taskStartedAtWallMillis = null,
+            taskElapsedSecondsAtBatchEnd = null,
+            startedAtWallMillis = 1_000,
+            endedAtWallMillis = 6_000,
+            baseElapsedNanos = 123,
+            sensorSamples = emptyList(),
+            touchEvents = emptyList(),
+            contextEvents = listOf(
+                ContextEventSnapshot(
+                    eventType = "TYPE_WINDOW_CONTENT_CHANGED",
+                    eventTimeWallMillis = 1_100,
+                    appPackageName = "com.example.front",
+                    foregroundActivityClassName = null,
+                    foregroundComponentName = null,
+                    inputMethodVisible = false,
+                    windowTitleRedacted = null,
+                    rootNodes = listOf(
+                        NodeSnapshot(
+                            nodeId = "node-1",
+                            className = "android.widget.EditText",
+                            viewIdResourceName = null,
+                            text = null,
+                            textRedacted = null,
+                            contentDescRedacted = null,
+                            clickable = false,
+                            editable = true,
+                            scrollable = false,
+                            password = true,
+                            childCount = 0,
+                            depth = 0
+                        )
+                    ),
+                    redactionSummary = emptyMap()
+                )
+            ),
+            contextFeatures = emptyList(),
+            skipEvents = emptyList()
+        )
+
+        val node = JSONObject(JsonCodec.batchToJson(batch, "1", "b".repeat(64)))
+            .getJSONArray("context_events")
+            .getJSONObject(0)
+            .getJSONArray("root_nodes")
+            .getJSONObject(0)
+        assertTrue(node.getBoolean("password"))
+    }
+
+    @Test
     fun batchJsonEscapesControlCharactersInRedactedContent() {
         val batch = Batch(
             batchId = UUID.randomUUID().toString(),

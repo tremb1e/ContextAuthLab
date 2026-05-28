@@ -176,7 +176,7 @@ Server ingest no longer performs the former secondary raw-field/sensitive-text s
 
 ## Context Feature
 
-Features include counts and heuristic scores such as `editable_count`, `scrollable_count`, `clickable_count`, `media_like_score`, `form_like_score`, `game_like_score`, `node_class_histogram`, `input_method_visible`, backwards-compatible `keyboard_visible_estimated`, `coarse_orientation`, nominal task fields (`task_sequence`, `task_id`, `task_name`, `task_intuitive_description`, `task_category`), and independent `estimated_context_category`.
+Features include counts and heuristic scores such as `editable_count`, `scrollable_count`, `clickable_count`, `password_node_seen`, `media_like_score`, `form_like_score`, `game_like_score`, `node_class_histogram`, `input_method_visible`, backwards-compatible `keyboard_visible_estimated`, `coarse_orientation`, nominal task fields (`task_sequence`, `task_id`, `task_name`, `task_intuitive_description`, `task_category`), and independent `estimated_context_category`.
 
 ## Redaction Rule
 

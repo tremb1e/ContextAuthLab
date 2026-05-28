@@ -52,9 +52,8 @@ class ClockSyncService(
         if (ntpResult.isSuccess) return@withContext
 
         val serverTimeResult = runCatching {
-            val config = configResult.getOrElse { fetchServerConfig() }
-            val t0 = System.currentTimeMillis()
-            publishSync(previous, t0, t0, config.serverTimeMillis, "server_config_fallback")
+            val config = fetchServerConfig()
+            publishSync(previous, config.requestStartedAtMillis, config.requestEndedAtMillis, config.serverTimeMillis, "server_config_fallback")
         }
         serverTimeResult.onFailure {
             val configError = configResult.exceptionOrNull()?.message ?: configResult.exceptionOrNull()?.javaClass?.simpleName
@@ -66,8 +65,10 @@ class ClockSyncService(
 
     private fun fetchServerConfig(): ServerConfig {
         val url = settingsStore.settings.value.serverUrl.trimEnd('/') + "/api/v1/config"
+        val startedAt = System.currentTimeMillis()
         val resp = httpClient.newCall(Request.Builder().url(url).get().build()).execute()
         resp.use {
+            val endedAt = System.currentTimeMillis()
             if (!it.isSuccessful) error("HTTP ${it.code}")
             val body = it.body?.string() ?: error("empty config")
             val json = JSONObject(body)
@@ -83,7 +84,12 @@ class ClockSyncService(
                     }
                 }
             }
-            return ServerConfig(serverTimeMillis = serverTime, ntpServers = ntpServers)
+            return ServerConfig(
+                serverTimeMillis = serverTime,
+                ntpServers = ntpServers,
+                requestStartedAtMillis = startedAt,
+                requestEndedAtMillis = endedAt
+            )
         }
     }
 
@@ -134,7 +140,9 @@ class ClockSyncService(
 
 data class ServerConfig(
     val serverTimeMillis: Long,
-    val ntpServers: List<String>
+    val ntpServers: List<String>,
+    val requestStartedAtMillis: Long,
+    val requestEndedAtMillis: Long
 )
 
 object ClockSyncMath {

@@ -164,6 +164,7 @@ class CollectionCoordinator(private val context: Context) {
         settingsStore.resetServerUrl()
         mutableUi.value = mutableUi.value.copy(serverReachable = false, lastServerHealthAtWallMillis = 0L)
         clockSync.trigger(scope)
+        scope.launch { checkRules(apply = true) }
     }
 
     fun setBatchSeconds(value: Int) = settingsStore.setBatchSeconds(value)

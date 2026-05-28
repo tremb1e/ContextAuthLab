@@ -33,6 +33,27 @@ class ContextFeatureExtractorTest {
     }
 
     @Test
+    fun preservesPasswordNodeSeenForUpstreamRedactionFailures() {
+        val event = ContextEventSnapshot(
+            eventType = "TYPE_WINDOW_CONTENT_CHANGED",
+            eventTimeWallMillis = 1_000,
+            appPackageName = "com.example.front",
+            foregroundActivityClassName = null,
+            foregroundComponentName = null,
+            inputMethodVisible = false,
+            windowTitleRedacted = null,
+            rootNodes = listOf(
+                NodeSnapshot("1", "android.widget.EditText", null, null, null, null, false, true, false, true, 0, 0)
+            ),
+            redactionSummary = emptyMap()
+        )
+
+        val feature = ContextFeatureExtractor().extract(event, CollectionSource.THIRD_PARTY_APP, null, null)
+
+        assertTrue(feature.passwordNodeSeen)
+    }
+
+    @Test
     fun mediaLikeThirdPartyUiEstimatesVideoCategory() {
         val event = ContextEventSnapshot(
             eventType = "TYPE_WINDOW_CONTENT_CHANGED",

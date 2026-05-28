@@ -57,10 +57,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Settings
@@ -112,7 +114,6 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.viewinterop.AndroidView
@@ -123,7 +124,12 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.contextauth.core.ClockSyncState
 import com.contextauth.core.CollectionStatus
 import com.contextauth.core.DEFAULT_SERVER_URL
@@ -626,12 +632,14 @@ private fun TaskRunnerScreen(
     var seconds by remember(task) { mutableIntStateOf(state.settings.taskSeconds) }
     var running by remember(task) { mutableStateOf(false) }
     var autoStarted by remember(task) { mutableStateOf(false) }
+    var taskInteractionStarted by remember(task) { mutableStateOf(task != TaskCategory.C5 && task != TaskCategory.C6) }
     var showPrivacy by remember { mutableStateOf(false) }
+    val waitsForInteraction = task == TaskCategory.C5 || task == TaskCategory.C6
     DisposableEffect(Unit) {
         onDispose { context.findActivity()?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
     }
-    LaunchedEffect(task, canStart) {
-        if (!autoStarted && canStart) {
+    LaunchedEffect(task, canStart, taskInteractionStarted) {
+        if (!autoStarted && canStart && taskInteractionStarted) {
             seconds = state.settings.taskSeconds
             autoStarted = true
             running = true
@@ -671,11 +679,17 @@ private fun TaskRunnerScreen(
             progress = 1f - seconds / state.settings.taskSeconds.toFloat(),
             modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(8.dp))
         )
-	        Text(l("剩余 ${seconds}s", "${seconds}s remaining"), style = MaterialTheme.typography.titleMedium)
-            if (!autoStarted && !canStart) {
+        Text(l("剩余 ${seconds}s", "${seconds}s remaining"), style = MaterialTheme.typography.titleMedium)
+            if (!taskInteractionStarted && waitsForInteraction) {
+                Banner(l("点击本任务的开始/播放后会进入全屏横屏并开始计时。", "Tap Start/Play in this task to enter fullscreen landscape and start timing."))
+            } else if (!autoStarted && !canStart) {
                 Banner(l("等待采集条件满足后将自动开始 30 秒计时。", "The 30-second timer will start automatically when collection requirements are met."))
             }
-	        TaskContent(task, onComplete = onDone)
+	        TaskContent(
+                task,
+                onComplete = onDone,
+                onInteractionStart = { taskInteractionStarted = true }
+            )
 	        CardBlock(l("采集状态", "Collection Status")) {
 	            InfoRow(l("采集目标", "Collection target"), sensorTargetSummary(state))
 	            InfoRow(l("传感器可用", "Sensors available"), "acc ${yesNo(state.accelerometerAvailable)} / gyro ${yesNo(state.gyroscopeAvailable)} / mag ${yesNo(state.magnetometerAvailable)}")
@@ -699,7 +713,11 @@ private fun TaskRunnerScreen(
 	}
 
 @Composable
-private fun TaskContent(task: TaskCategory, onComplete: () -> Unit) {
+private fun TaskContent(
+    task: TaskCategory,
+    onComplete: () -> Unit,
+    onInteractionStart: () -> Unit
+) {
     CardBlock(task.localizedTaskName()) {
         when (task) {
             TaskCategory.C0 -> QuietHoldClock()
@@ -707,8 +725,8 @@ private fun TaskContent(task: TaskCategory, onComplete: () -> Unit) {
             TaskCategory.C2 -> ResearchFeed()
             TaskCategory.C3 -> CopyWritingTask()
             TaskCategory.C4 -> PreferenceControls()
-            TaskCategory.C5 -> BlueBallTapGame(onComplete)
-            TaskCategory.C6 -> VideoWatchingTask()
+            TaskCategory.C5 -> BlueBallTapGame(onComplete, onInteractionStart)
+            TaskCategory.C6 -> VideoWatchingTask(onInteractionStart)
             TaskCategory.C7 -> WristRotationGuide()
         }
     }
@@ -856,9 +874,7 @@ private fun PreferenceControls() {
 }
 
 @Composable
-private fun BlueBallTapGame(onComplete: () -> Unit) {
-    val context = LocalContext.current
-    val configuration = LocalConfiguration.current
+private fun BlueBallTapGame(onComplete: () -> Unit, onInteractionStart: () -> Unit) {
     val haptic = LocalHapticFeedback.current
     val totalTargets = 30
     val random = remember { Random(System.nanoTime()) }
@@ -872,119 +888,146 @@ private fun BlueBallTapGame(onComplete: () -> Unit) {
         y = 0.12f + random.nextFloat() * 0.76f
     )
 
-    DisposableEffect(Unit) {
-        onDispose {
-            context.findActivity()?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        }
-    }
     LaunchedEffect(completed) {
         if (completed) {
-            context.findActivity()?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            delay(900)
+            delay(700)
             onComplete()
         }
     }
 
     Text(l(
-        "点击开始后页面会切到横屏。随机位置会出现一颗蓝色小球，点中后立即刷新下一颗；连续点中 30 颗即过关并自动回到任务页。",
-        "Tap Start to switch to landscape. A blue ball appears at a random position; tap it to spawn the next ball. Hit 30 balls to pass and return automatically."
+        "点击开始后会进入横屏全屏挑战。随机位置会出现一颗蓝色小球，点中后立即刷新下一颗；连续点中 30 颗即过关并自动回到任务页。",
+        "Tap Start to enter a fullscreen landscape challenge. A blue ball appears at a random position; tap it to spawn the next ball. Hit 30 balls to pass and return automatically."
     ))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         AssistChip(onClick = {}, label = { Text("${hitCount}/$totalTargets") })
-        AssistChip(onClick = {}, label = { Text(if (started) l("横屏挑战中", "Landscape challenge") else l("等待开始", "Ready")) })
-        if (!started) {
-            Button(
-                onClick = {
-                    context.findActivity()?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                    ball = nextBall()
-                    hitCount = 0
-                    completed = false
-                    started = true
-                }
-            ) {
-                Text(l("开始", "Start"))
+        AssistChip(onClick = {}, label = { Text(if (started) l("全屏挑战中", "Fullscreen challenge") else l("等待开始", "Ready")) })
+        Button(
+            enabled = !started,
+            onClick = {
+                ball = nextBall()
+                hitCount = 0
+                completed = false
+                pulse = 0
+                started = true
+                onInteractionStart()
             }
+        ) {
+            Text(l("开始", "Start"))
         }
     }
 
-    val gameHeight = if (configuration.screenWidthDp > configuration.screenHeightDp) {
-        (configuration.screenHeightDp - 120).coerceAtLeast(260).dp
-    } else {
-        320.dp
-    }
-    val ballColor = Color(0xFF1976D2)
-    val glowColor = Color(0xFF64B5F6)
-    val successColor = Color(0xFF2E7D32)
-    Canvas(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(gameHeight)
-            .clip(RoundedCornerShape(18.dp))
-            .background(Color(0xFF071421))
-            .pointerInput(started, ball, hitCount, completed) {
-                detectTapGestures { tap ->
-                    if (!started || completed) return@detectTapGestures
-                    val radius = minOf(size.width, size.height) * 0.055f
-                    val center = Offset(size.width * ball.x, size.height * ball.y)
-                    if ((tap - center).getDistance() <= radius * 1.25f) {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        val nextCount = hitCount + 1
-                        hitCount = nextCount
-                        pulse += 1
-                        if (nextCount >= totalTargets) {
-                            completed = true
+    if (started) {
+        Dialog(
+            onDismissRequest = {
+                if (!completed) started = false
+            },
+            properties = DialogProperties(
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false,
+                usePlatformDefaultWidth = false
+            )
+        ) {
+            FullscreenSessionEffect(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)
+            Surface(Modifier.fillMaxSize(), color = Color(0xFF071421)) {
+                Box(Modifier.fillMaxSize()) {
+                    val ballColor = Color(0xFF1976D2)
+                    val glowColor = Color(0xFF64B5F6)
+                    val successColor = Color(0xFF2E7D32)
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0xFF071421))
+                            .pointerInput(started, ball, hitCount, completed) {
+                                detectTapGestures { tap ->
+                                    if (!started || completed) return@detectTapGestures
+                                    val radius = minOf(size.width, size.height) * 0.060f
+                                    val center = Offset(size.width * ball.x, size.height * ball.y)
+                                    if ((tap - center).getDistance() <= radius * 1.25f) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        val nextCount = hitCount + 1
+                                        hitCount = nextCount
+                                        pulse += 1
+                                        if (nextCount >= totalTargets) {
+                                            completed = true
+                                        } else {
+                                            ball = nextBall()
+                                        }
+                                    }
+                                }
+                            }
+                    ) {
+                        val minSide = minOf(size.width, size.height)
+                        val gridColor = Color.White.copy(alpha = 0.08f)
+                        drawRect(Color(0xFF071421))
+                        for (i in 1..12) {
+                            val x = size.width * i / 13f
+                            drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.2f)
+                        }
+                        for (i in 1..6) {
+                            val y = size.height * i / 7f
+                            drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.2f)
+                        }
+                        drawRoundRect(
+                            color = Color.White.copy(alpha = 0.18f),
+                            topLeft = Offset(10f, 10f),
+                            size = Size(size.width - 20f, size.height - 20f),
+                            cornerRadius = CornerRadius(28f, 28f),
+                            style = Stroke(width = 3f)
+                        )
+                        if (completed) {
+                            drawCircle(successColor.copy(alpha = 0.20f), radius = minSide * 0.36f, center = center)
+                            drawCircle(successColor, radius = minSide * 0.11f, center = center)
+                            drawLine(Color.White, center + Offset(-minSide * 0.045f, 0f), center + Offset(-minSide * 0.012f, minSide * 0.035f), strokeWidth = minSide * 0.018f)
+                            drawLine(Color.White, center + Offset(-minSide * 0.012f, minSide * 0.035f), center + Offset(minSide * 0.055f, -minSide * 0.050f), strokeWidth = minSide * 0.018f)
                         } else {
-                            ball = nextBall()
+                            val center = Offset(size.width * ball.x, size.height * ball.y)
+                            val radius = minSide * 0.060f
+                            val wave = (pulse % 4) * radius * 0.14f
+                            drawCircle(glowColor.copy(alpha = 0.18f), radius = radius * 2.5f + wave, center = center)
+                            drawCircle(glowColor.copy(alpha = 0.30f), radius = radius * 1.55f, center = center)
+                            drawCircle(ballColor, radius = radius, center = center)
+                            drawCircle(Color.White.copy(alpha = 0.85f), radius = radius * 0.24f, center = center + Offset(-radius * 0.28f, -radius * 0.28f))
+                        }
+                    }
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp)
+                            .align(Alignment.TopCenter),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(color = Color.Black.copy(alpha = 0.54f), shape = RoundedCornerShape(24.dp)) {
+                            Text(
+                                "${hitCount}/$totalTargets",
+                                color = Color.White,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = { if (!completed) started = false },
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(24.dp))
+                                .background(Color.Black.copy(alpha = 0.54f))
+                        ) {
+                            Icon(Icons.Outlined.Close, contentDescription = l("退出", "Close"), tint = Color.White)
                         }
                     }
                 }
             }
-    ) {
-        val minSide = minOf(size.width, size.height)
-        val gridColor = Color.White.copy(alpha = 0.08f)
-        drawRect(Color(0xFF071421))
-        for (i in 1..8) {
-            val x = size.width * i / 9f
-            drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.2f)
-        }
-        for (i in 1..5) {
-            val y = size.height * i / 6f
-            drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.2f)
-        }
-        drawRoundRect(
-            color = Color.White.copy(alpha = 0.18f),
-            topLeft = Offset(6f, 6f),
-            size = Size(size.width - 12f, size.height - 12f),
-            cornerRadius = CornerRadius(24f, 24f),
-            style = Stroke(width = 3f)
-        )
-        if (completed) {
-            drawCircle(successColor.copy(alpha = 0.20f), radius = minSide * 0.36f, center = center)
-            drawCircle(successColor, radius = minSide * 0.11f, center = center)
-            drawLine(Color.White, center + Offset(-minSide * 0.045f, 0f), center + Offset(-minSide * 0.012f, minSide * 0.035f), strokeWidth = minSide * 0.018f)
-            drawLine(Color.White, center + Offset(-minSide * 0.012f, minSide * 0.035f), center + Offset(minSide * 0.055f, -minSide * 0.050f), strokeWidth = minSide * 0.018f)
-        } else if (started) {
-            val center = Offset(size.width * ball.x, size.height * ball.y)
-            val radius = minSide * 0.055f
-            val wave = (pulse % 4) * radius * 0.14f
-            drawCircle(glowColor.copy(alpha = 0.18f), radius = radius * 2.5f + wave, center = center)
-            drawCircle(glowColor.copy(alpha = 0.30f), radius = radius * 1.55f, center = center)
-            drawCircle(ballColor, radius = radius, center = center)
-            drawCircle(Color.White.copy(alpha = 0.85f), radius = radius * 0.24f, center = center + Offset(-radius * 0.28f, -radius * 0.28f))
-        } else {
-            drawCircle(glowColor.copy(alpha = 0.10f), radius = minSide * 0.28f, center = center)
         }
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun VideoWatchingTask() {
+private fun VideoWatchingTask(onInteractionStart: () -> Unit) {
     val context = LocalContext.current
-    val activity = context.findActivity()
     val videoUri = remember(context) { Uri.parse("android.resource://${context.packageName}/${R.raw.c6_video}") }
     var activated by remember { mutableStateOf(false) }
-    var landscape by remember { mutableStateOf(false) }
+    var interactionStarted by remember { mutableStateOf(false) }
+    var landscape by remember { mutableStateOf(true) }
     var prepared by remember { mutableStateOf(false) }
     var playing by remember { mutableStateOf(false) }
     var speed by remember { mutableStateOf(1.0f) }
@@ -995,13 +1038,14 @@ private fun VideoWatchingTask() {
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
     var videoView by remember { mutableStateOf<VideoView?>(null) }
 
-    fun applyOrientation(isLandscape: Boolean) {
-        landscape = isLandscape
-        activity?.requestedOrientation = if (isLandscape) {
-            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-        } else {
-            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        }
+    fun closePlayer() {
+        videoView?.stopPlayback()
+        videoView = null
+        mediaPlayer = null
+        prepared = false
+        playing = false
+        activated = false
+        landscape = true
     }
     fun applySpeed() {
         if (Build.VERSION.SDK_INT >= 23) {
@@ -1013,13 +1057,17 @@ private fun VideoWatchingTask() {
             }
         }
     }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            videoView?.stopPlayback()
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    fun setPlayback(nextPlaying: Boolean) {
+        playing = nextPlaying
+        videoView?.let { view ->
+            if (nextPlaying) {
+                view.start()
+            } else {
+                view.pause()
+            }
         }
     }
+
     LaunchedEffect(mediaPlayer, speed) {
         applySpeed()
     }
@@ -1033,123 +1081,177 @@ private fun VideoWatchingTask() {
     }
 
     Text(l(
-        "请按自己最舒适的姿势手握手机观看视频。点击播放器后会自动切到横屏并播放；观看过程中请自然尝试暂停/继续、倍速、拖动进度条，以及横屏/竖屏切换。",
-        "Hold the phone in your most comfortable viewing posture. Tap the player to switch to landscape and start playback; naturally try pause/resume, playback speed, seeking, and landscape/portrait switching."
+        "点击播放后会进入真实的全屏播放器并自动横屏；播放过程中请自然尝试暂停/继续、倍速、拖动进度条，以及横屏/竖屏切换。",
+        "Tap Play to enter a real fullscreen player in landscape; naturally try pause/resume, playback speed, seeking, and landscape/portrait switching."
     ))
-    if (!activated) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(260.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(Color(0xFF101820))
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(18.dp))
-                .combinedClickable(onClick = {
-                    activated = true
-                    applyOrientation(true)
-                }),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Icon(Icons.Outlined.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(54.dp))
-                Text(l("点击开始播放并横屏", "Tap to play in landscape"), color = Color.White, fontWeight = FontWeight.SemiBold)
-            }
-        }
-    } else {
-        AndroidView(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(if (landscape) 300.dp else 260.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(Color.Black),
-            factory = { viewContext ->
-                VideoView(viewContext).apply {
-                    videoView = this
-                    setVideoURI(videoUri)
-                    setOnPreparedListener { player ->
-                        mediaPlayer = player
-                        prepared = true
-                        playing = true
-                        videoDurationMs = duration.coerceAtLeast(1)
-                        player.isLooping = true
-                        applySpeed()
-                        start()
-                    }
-                    setOnCompletionListener {
-                        seekTo(0)
-                        start()
-                    }
-                    setOnClickListener {
-                        if (isPlaying) {
-                            pause()
-                            playing = false
-                        } else {
-                            start()
-                            playing = true
-                        }
-                    }
-                    start()
-                }
-            },
-            update = { view ->
-                if (playing && prepared && !view.isPlaying) view.start()
-                if (!playing && view.isPlaying) view.pause()
-            }
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(260.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xFF101820))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(18.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Icon(Icons.Outlined.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(54.dp))
             Button(
                 onClick = {
-                    videoView?.let { view ->
-                        if (view.isPlaying) {
-                            view.pause()
-                            playing = false
-                        } else {
-                            view.start()
-                            playing = true
-                        }
+                    activated = true
+                    landscape = true
+                    if (!interactionStarted) {
+                        interactionStarted = true
+                        onInteractionStart()
                     }
                 }
             ) {
-                Text(if (playing) l("暂停", "Pause") else l("播放", "Play"))
-            }
-            OutlinedButton(onClick = { applyOrientation(!landscape) }) {
-                Text(if (landscape) l("切到竖屏", "Portrait") else l("切到横屏", "Landscape"))
+                Text(l("播放并全屏", "Play fullscreen"))
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            listOf(0.75f, 1.0f, 1.25f, 1.5f).forEach { option ->
-                FilterChip(
-                    selected = speed == option,
-                    onClick = {
-                        speed = option
-                        applySpeed()
-                    },
-                    label = { Text("${option}x") }
-                )
+    }
+
+    if (activated) {
+        Dialog(
+            onDismissRequest = { closePlayer() },
+            properties = DialogProperties(
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false,
+                usePlatformDefaultWidth = false
+            )
+        ) {
+            FullscreenSessionEffect(
+                if (landscape) ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            )
+            Surface(Modifier.fillMaxSize(), color = Color.Black) {
+                Box(Modifier.fillMaxSize().background(Color.Black)) {
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { viewContext ->
+                            VideoView(viewContext).apply {
+                                videoView = this
+                                setVideoURI(videoUri)
+                                setOnPreparedListener { player ->
+                                    mediaPlayer = player
+                                    prepared = true
+                                    playing = true
+                                    videoDurationMs = duration.coerceAtLeast(1)
+                                    player.isLooping = true
+                                    applySpeed()
+                                    start()
+                                }
+                                setOnCompletionListener {
+                                    seekTo(0)
+                                    start()
+                                    playing = true
+                                }
+                                setOnClickListener {
+                                    setPlayback(!isPlaying)
+                                }
+                            }
+                        },
+                        update = { view ->
+                            if (playing && prepared && !view.isPlaying) view.start()
+                            if (!playing && view.isPlaying) view.pause()
+                        }
+                    )
+                    IconButton(
+                        onClick = { closePlayer() },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(12.dp)
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(Color.Black.copy(alpha = 0.58f))
+                    ) {
+                        Icon(Icons.Outlined.Close, contentDescription = l("关闭播放器", "Close player"), tint = Color.White)
+                    }
+                    Column(
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .background(Color.Black.copy(alpha = 0.68f))
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val sliderValue = if (seeking) seekFraction else (videoPositionMs.toFloat() / videoDurationMs.toFloat()).coerceIn(0f, 1f)
+                        Slider(
+                            value = sliderValue,
+                            onValueChange = {
+                                seeking = true
+                                seekFraction = it
+                            },
+                            onValueChangeFinished = {
+                                val target = (seekFraction * videoDurationMs).roundToInt().coerceIn(0, videoDurationMs)
+                                videoView?.seekTo(target)
+                                videoPositionMs = target
+                                seeking = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { setPlayback(!playing) },
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(24.dp))
+                                    .background(Color.White.copy(alpha = 0.16f))
+                            ) {
+                                Icon(
+                                    if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                                    contentDescription = if (playing) l("暂停", "Pause") else l("播放", "Play"),
+                                    tint = Color.White
+                                )
+                            }
+                            Text(
+                                "${formatDuration(videoPositionMs)} / ${formatDuration(videoDurationMs)}",
+                                color = Color.White,
+                                modifier = Modifier.weight(1f)
+                            )
+                            listOf(0.75f, 1.0f, 1.25f, 1.5f).forEach { option ->
+                                FilterChip(
+                                    selected = speed == option,
+                                    onClick = {
+                                        speed = option
+                                        applySpeed()
+                                    },
+                                    label = { Text("${option}x") }
+                                )
+                            }
+                            OutlinedButton(onClick = { landscape = !landscape }) {
+                                Text(if (landscape) l("竖屏", "Portrait") else l("横屏", "Landscape"))
+                            }
+                        }
+                    }
+                }
             }
         }
-        val sliderValue = if (seeking) seekFraction else (videoPositionMs.toFloat() / videoDurationMs.toFloat()).coerceIn(0f, 1f)
-        Slider(
-            value = sliderValue,
-            onValueChange = {
-                seeking = true
-                seekFraction = it
-            },
-            onValueChangeFinished = {
-                val target = (seekFraction * videoDurationMs).roundToInt().coerceIn(0, videoDurationMs)
-                videoView?.seekTo(target)
-                videoPositionMs = target
-                seeking = false
-            },
-            modifier = Modifier.fillMaxWidth()
-        )
-        Text(
-            l(
-                "进度 ${formatDuration(videoPositionMs)} / ${formatDuration(videoDurationMs)}",
-                "Progress ${formatDuration(videoPositionMs)} / ${formatDuration(videoDurationMs)}"
-            ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+    }
+}
+
+@Composable
+private fun FullscreenSessionEffect(orientation: Int) {
+    val activity = LocalContext.current.findActivity()
+    DisposableEffect(activity, orientation) {
+        val window = activity?.window
+        activity?.requestedOrientation = orientation
+        window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (window != null) {
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            WindowInsetsControllerCompat(window, window.decorView).apply {
+                hide(WindowInsetsCompat.Type.systemBars())
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        }
+        onDispose {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            if (window != null) {
+                WindowCompat.setDecorFitsSystemWindows(window, true)
+                WindowInsetsControllerCompat(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
     }
 }
 
@@ -1893,7 +1995,7 @@ private fun ResearcherSettingsScreen(
 	        OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text("server URL") }, modifier = Modifier.fillMaxWidth())
 	        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
 	            Button(onClick = { if (isBasicUrl(url)) pendingUrl = url else result = l("URL 格式无效", "Invalid URL format") }) { Text(l("确认覆盖", "Override")) }
-	            OutlinedButton(onClick = { onTestConnection(url); result = l("已发起 /health 连通性测试", "Started /health connectivity test") }) { Text(l("测试连通性", "Test Connection")) }
+	            OutlinedButton(onClick = { onTestConnection(url); result = l("已发起 /ready 可写性测试", "Started /ready readiness test") }) { Text(l("测试连通性", "Test Connection")) }
 	        }
 	        OutlinedButton(onClick = { url = DEFAULT_SERVER_URL; onReset() }) { Text(l("重置为默认（cca.macrz.com）", "Reset to default (cca.macrz.com)")) }
 	        OutlinedButton(onClick = { confirmClear = true }) { Text(l("清空本地失败队列", "Clear Local Failure Queue")) }
