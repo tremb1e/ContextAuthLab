@@ -74,10 +74,10 @@ class RuleUpdateClient(private val client: OkHttpClient) {
 
         private fun canonicalJson(value: Any?): String = when (value) {
             null, JSONObject.NULL -> "null"
-            is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(prefix = "{", postfix = "}") { key ->
+            is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(separator = ",", prefix = "{", postfix = "}") { key ->
                 JSONObject.quote(key) + ":" + canonicalJson(value.get(key))
             }
-            is JSONArray -> (0 until value.length()).joinToString(prefix = "[", postfix = "]") { index ->
+            is JSONArray -> (0 until value.length()).joinToString(separator = ",", prefix = "[", postfix = "]") { index ->
                 canonicalJson(value.get(index))
             }
             is String -> JSONObject.quote(value)

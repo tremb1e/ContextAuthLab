@@ -70,15 +70,17 @@ Current payload:
 ```
 
 The Android client fetches this endpoint on startup/readiness success and after
-server URL changes. Missing, malformed, or mismatched `rule_hash` values are
-reported in diagnostics but do not block local collection; the client computes a
-usable hash for metadata and skips invalid regex entries and package-name targets while keeping baseline redaction active.
+server URL changes. The client and server both compute `rule_hash` from compact
+canonical JSON with sorted object keys and no whitespace. Missing, malformed, or
+mismatched values are reported in diagnostics but do not block local collection;
+the client computes a usable hash for metadata and skips invalid regex entries
+and package-name targets while keeping baseline redaction active.
 
 ## `POST /api/v1/ingest`
 
 Accepts LZ4 frame JSON envelope. Valid requests are stored on disk and return `status`, `batch_id`, `stored`, and `device_id_prefix` without exposing the full device ID or server filesystem path. Replaying the exact same `device_id + batch_id` payload is idempotent; a conflicting duplicate `batch_id` returns `409 duplicate_batch_id_conflict` without overwriting the original batch. Payload SHA-256 mismatches, invalid algorithm, bad IDs, corrupt LZ4, schema failures, and task-label contract failures are rejected or quarantined. `rule_version` and `rule_hash` are lineage metadata and are not required to match the server's current active rules before storage.
 
-The server expects Accessibility-derived UI values to use the current schema: top-level and event-level plaintext `app_package_name`, optional `foreground_activity_class_name` and `foreground_component_name`, event-level `input_method_visible` and `coarse_orientation`, node-level `viewIdResourceName`, visible/long-clickable booleans, and non-editable node `text`. Touch events may include only event IDs, event type, uptime timestamp, wall-clock timestamp, and collection timestamp; coordinates, paths, pressure, and size are not schema fields. Current global touch event types are `TOUCH_INTERACTION_START` and `TOUCH_INTERACTION_END`; legacy in-app timing types remain accepted for older payloads. Raw input-field text must not be present; editable nodes containing raw `text` fail schema validation. Password nodes must be dropped before upload. Batches with `diagnostics.redaction_applied` other than `true` fail schema validation. The former secondary server scan for raw UI field names, prose in `*_redacted`, and obvious sensitive strings has been removed.
+The server expects Accessibility-derived UI values to use the current schema: top-level and event-level plaintext `app_package_name`, optional `foreground_activity_class_name` and `foreground_component_name`, event-level `input_method_visible` and `coarse_orientation`, node-level `viewIdResourceName`, visible/long-clickable booleans, and non-editable node `text`. Touch events may include only event IDs, event type, uptime timestamp, wall-clock timestamp, and collection timestamp; coordinates, paths, pressure, and size are not schema fields. Current global touch event types are `TOUCH_INTERACTION_START` and `TOUCH_INTERACTION_END`; legacy in-app timing types remain accepted for older payloads. Raw input-field text must not be present; editable nodes containing raw `text` fail schema validation. Password nodes must be dropped before upload. Batches with `diagnostics.redaction_applied` other than `true` fail schema validation. Diagnostics counts must match the payload arrays, and context features must reference context events in the same batch while carrying matching source/task metadata. The former secondary server scan for raw UI field names, prose in `*_redacted`, and obvious sensitive strings has been removed.
 
 ## `GET /metrics`
 

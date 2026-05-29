@@ -52,7 +52,7 @@ class ClockSyncService(
         if (ntpResult.isSuccess) return@withContext
 
         val serverTimeResult = runCatching {
-            val config = fetchServerConfig()
+            val config = configResult.getOrNull() ?: fetchServerConfig()
             publishSync(previous, config.requestStartedAtMillis, config.requestEndedAtMillis, config.serverTimeMillis, "server_config_fallback")
         }
         serverTimeResult.onFailure {

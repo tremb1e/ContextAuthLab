@@ -37,7 +37,9 @@ Client-side redaction is the primary protection. Email, phone, URL, long number,
 
 Remote rules from `/api/v1/rules` can add text/content-description redaction patterns, but failures or invalid entries do not disable the built-in baseline. Package-name skip behavior has been removed: the app collects each foreground app's accessible UI and applies redaction instead of dropping whole packages.
 
-The server no longer performs the former secondary sensitive-string/raw-UI scan. It still validates the envelope, compressed payload hash, LZ4/JSON shape, Pydantic schema, task contract, editable-text dropping, password-node absence, and `diagnostics.redaction_applied: true`.
+The Accessibility service catches framework/OEM event exceptions and only traverses UI windows while collection is active, reducing the chance of system service faults without changing the collected field set.
+
+The server no longer performs the former secondary sensitive-string/raw-UI scan. It still validates the envelope, compressed payload hash, LZ4/JSON shape, Pydantic schema, task contract, editable-text dropping, password-node absence, `diagnostics.redaction_applied: true`, matching diagnostics counts, and context-feature references to same-batch context events.
 
 ## Storage
 

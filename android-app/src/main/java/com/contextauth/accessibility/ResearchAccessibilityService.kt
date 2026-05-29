@@ -10,6 +10,7 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import com.contextauth.core.AccessibilityCollectionGate
 import com.contextauth.core.AccessibilityEventBus
 import com.contextauth.core.CoarseOrientation
 import com.contextauth.core.ContextEventSnapshot
@@ -25,7 +26,14 @@ class ResearchAccessibilityService : AccessibilityService() {
     private var lastForegroundTarget = ForegroundTarget()
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        runCatching {
+            handleAccessibilityEvent(event)
+        }
+    }
+
+    private fun handleAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
+        if (!AccessibilityCollectionGate.active) return
         if (isGlobalTouchEvent(event.eventType)) {
             emitGlobalTouchEvent(event)
             return
@@ -56,6 +64,11 @@ class ResearchAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() = Unit
+
+    override fun onDestroy() {
+        AccessibilityCollectionGate.active = false
+        super.onDestroy()
+    }
 
     private fun traverse(
         node: AccessibilityNodeInfo,

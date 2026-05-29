@@ -95,6 +95,8 @@ The decompressed payload is UTF-8 JSON:
 
 `BUILTIN_TASK` requires non-null `task_sequence`, `task_id`, `task_name`, `task_intuitive_description`, `task_category`, `task_session_id`, `task_started_at_wall_millis`, and `task_elapsed_seconds_at_batch_end`. `task_id` and `task_category` use `C0` through `C7`; `task_sequence` is the numeric part. Current task labels are stable English research labels in the payload, while the app UI localizes labels to Chinese or English according to system language. `THIRD_PARTY_APP` requires task-specific fields other than `session_id` to be null.
 
+Server validation also checks that diagnostic sample/event counts match the actual arrays, that diagnostics `sampling_rate_hz` matches the batch sampling rate when present, and that each context feature uses the same source/task metadata as the enclosing batch. A context feature `event_id` must reference an event in the same batch's `context_events`.
+
 ## Sensor Sample
 
 ```json
@@ -111,7 +113,7 @@ The decompressed payload is UTF-8 JSON:
 
 ## Touch Event
 
-Touch events are emitted by the AccessibilityService for global screen touch interactions while collection is active. They contain detailed timing and intentionally omit coordinates, trajectories, pressure, and contact size.
+Touch events are emitted by the AccessibilityService for global screen touch interactions while collection is active. The service returns before UI-window traversal when collection is not active, which avoids unnecessary Accessibility workload while preserving the enabled-service state. Touch events contain detailed timing and intentionally omit coordinates, trajectories, pressure, and contact size.
 
 ```json
 {
@@ -172,7 +174,7 @@ Context events contain event metadata, foreground context, input-method visibili
 
 Editable node text is replaced with `<EDITABLE_TEXT_DROPPED>`/`null` before serialization, and password nodes are omitted entirely. Non-editable visible component text is retained after fixed-format sensitive substrings are replaced with placeholders such as `<EMAIL>`, `<PHONE>`, `<URL>`, `<CARD>`, `<ID_NUM>`, `<TOKEN>`, or `<NUM>`. Dynamic rules from `/api/v1/rules` provide text/content-description pattern replacements. Package-name skip behavior has been removed; every foreground app UI is collected and redacted.
 
-Server ingest no longer performs the former secondary raw-field/sensitive-text scan. Pydantic schema validation remains active: non-editable `text` and `viewIdResourceName` are allowed, editable nodes with raw `text` fail schema validation, password nodes must be absent, and valid batches must include `diagnostics.redaction_applied: true`; a false or missing value fails schema validation.
+Server ingest no longer performs the former secondary raw-field/sensitive-text scan. Pydantic schema validation remains active: non-editable `text` and `viewIdResourceName` are allowed, editable nodes with raw `text` fail schema validation, password nodes must be absent, valid batches must include `diagnostics.redaction_applied: true`, diagnostics counts must match the payload arrays, and context features must reference context events in the same batch; a false or missing redaction marker fails schema validation.
 
 ## Context Feature
 

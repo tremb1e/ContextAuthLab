@@ -65,7 +65,18 @@ class Uploader(
                 }
                 .onFailure { error ->
                     val nextRetry = item.retryCount + 1
-                    if (FailureQueuePolicy.shouldDeadLetter(nextRetry)) {
+                    if (!FailureQueuePolicy.shouldQueueFailure(error)) {
+                        recordHistory(
+                            item.fileName,
+                            item.batchId,
+                            now,
+                            file.length(),
+                            "DEAD_LETTER_NON_RETRIABLE",
+                            error.message ?: error::class.java.simpleName
+                        )
+                        file.renameTo(File(deadLetterDir, file.name))
+                        metadata.delete(item.fileName)
+                    } else if (FailureQueuePolicy.shouldDeadLetter(nextRetry)) {
                         recordHistory(
                             item.fileName,
                             item.batchId,

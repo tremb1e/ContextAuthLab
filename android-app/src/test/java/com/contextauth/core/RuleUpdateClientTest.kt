@@ -126,6 +126,30 @@ class RuleUpdateClientTest {
     }
 
     @Test
+    fun canonicalRuleHashMatchesServerCompactJson() {
+        val json = JSONObject(
+            """
+            {
+              "version": "1",
+              "updated_at": "2026-05-22T00:00:00Z",
+              "rules": [
+                {"id": "email", "target": "text", "action": "REDACT", "pattern": "email", "replacement": "<EMAIL>"},
+                {"id": "phone", "target": "text", "action": "REDACT", "pattern": "phone", "replacement": "<PHONE>"}
+              ],
+              "package_blocklist": [],
+              "max_text_length": 128,
+              "default_text_action": "REDACT"
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(
+            "c1b34fad5275247c32ab8260bea1716540519b44039c63b31ab5480d09cedbf9",
+            RuleUpdateClient.canonicalRuleHash(json)
+        )
+    }
+
+    @Test
     fun acceptsMissingVersionAndRuleHashWithSafeDefaults() {
         val result = RuleUpdateClient.parseRulesResponse(
             """

@@ -1,5 +1,6 @@
 package com.contextauth.core
 
+import android.content.ComponentName
 import android.app.NotificationManager
 import android.content.Context
 import android.content.BroadcastReceiver
@@ -11,6 +12,7 @@ import android.app.KeyguardManager
 import android.os.Build
 import android.os.PowerManager
 import android.view.accessibility.AccessibilityManager
+import com.contextauth.accessibility.ResearchAccessibilityService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -104,6 +106,7 @@ class CollectionCoordinator(private val context: Context) {
         scope.launch {
             clockSync.state.collectLatest { clock ->
                 mutableUi.value = mutableUi.value.copy(clock = clock)
+                sensorCollector.updateServerOffset(clock.serverOffsetMillis)
             }
         }
         scope.launch {
@@ -191,6 +194,7 @@ class CollectionCoordinator(private val context: Context) {
         if (state.status == CollectionStatus.RUNNING && previousContext.taskCategory == category) return
         if (state.status == CollectionStatus.RUNNING) {
             collectionJob?.cancel()
+            AccessibilityCollectionGate.active = false
             val samples = sensorCollector.stop()
             val events = drainContextEvents()
             val touches = drainTouchEvents()
@@ -213,6 +217,7 @@ class CollectionCoordinator(private val context: Context) {
         drainContextEvents()
         drainTouchEvents()
         sensorCollector.start(state.clock.serverOffsetMillis)
+        AccessibilityCollectionGate.active = true
         mutableUi.value = mutableUi.value.copy(status = CollectionStatus.RUNNING)
         collectionJob?.cancel()
         collectionJob = scope.launch {
@@ -228,6 +233,7 @@ class CollectionCoordinator(private val context: Context) {
         if (state.status == CollectionStatus.IDLE) return
         val finishedContext = currentCollectionContext()
         collectionJob?.cancel()
+        AccessibilityCollectionGate.active = false
         val samples = sensorCollector.stop()
         val events = drainContextEvents()
         val touches = drainTouchEvents()
@@ -286,8 +292,11 @@ class CollectionCoordinator(private val context: Context) {
             true
         }
         val accessibilityManager = appContext.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
-        val enabled = accessibilityManager.getEnabledAccessibilityServiceList(-1)
-            .any { it.resolveInfo.serviceInfo.packageName == appContext.packageName }
+        val serviceComponent = ComponentName(appContext, ResearchAccessibilityService::class.java)
+        val enabled = accessibilityManager.getEnabledAccessibilityServiceList(-1).any {
+            val serviceInfo = it.resolveInfo.serviceInfo
+            ComponentName(serviceInfo.packageName, serviceInfo.name) == serviceComponent
+        }
         mutableUi.value = mutableUi.value.copy(
             batteryWhitelisted = if (Build.VERSION.SDK_INT >= 23) pm.isIgnoringBatteryOptimizations(appContext.packageName) else true,
             notificationAllowed = notificationAllowed,
@@ -326,7 +335,7 @@ class CollectionCoordinator(private val context: Context) {
         val message = result.getOrElse { it.message ?: it::class.java.simpleName }
         mutableUi.value = mutableUi.value.copy(
             serverReachable = result.isSuccess,
-            lastServerHealthAtWallMillis = if (result.isSuccess) now else mutableUi.value.lastServerHealthAtWallMillis,
+            lastServerHealthAtWallMillis = now,
             diagnostics = mutableUi.value.diagnostics.copy(lastServerMessage = message)
         )
     }
@@ -538,6 +547,7 @@ class CollectionCoordinator(private val context: Context) {
         val pausedContext = currentCollectionContext()
         resumeAfterGate = state.status == CollectionStatus.RUNNING
         collectionJob?.cancel()
+        AccessibilityCollectionGate.active = false
         val samples = sensorCollector.stop()
         val touches = drainTouchEvents()
         val events = drainContextEvents()

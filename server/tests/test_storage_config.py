@@ -74,3 +74,19 @@ def test_min_free_bytes_must_not_be_negative(monkeypatch) -> None:
     finally:
         monkeypatch.delenv("SERVER_MIN_FREE_BYTES", raising=False)
         importlib.reload(config)
+
+
+def test_ingest_require_auth_fails_fast_until_supported(monkeypatch) -> None:
+    monkeypatch.setenv("INGEST_REQUIRE_AUTH", "true")
+
+    import app.config as config
+
+    try:
+        importlib.reload(config)
+    except ValueError as exc:
+        assert str(exc) == "INGEST_REQUIRE_AUTH_unsupported"
+    else:
+        raise AssertionError("expected INGEST_REQUIRE_AUTH unsupported validation error")
+    finally:
+        monkeypatch.delenv("INGEST_REQUIRE_AUTH", raising=False)
+        importlib.reload(config)

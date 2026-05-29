@@ -38,7 +38,7 @@ paths after the first successful boot.
 - `SERVER_CHOWN_RECURSIVE`: recursively chown mounted data/log paths on startup, default `true`; set to `false` after first boot for very large datasets if ownership is already correct.
 - `SERVER_MIN_FREE_BYTES`: non-negative free-space floor before accepting writes, default `10485760`.
 - `RULES_VERSION`: fallback redaction rules version used when a newly materialized rules file has no version, default `1`.
-- `INGEST_REQUIRE_AUTH`: reserved, default `false`.
+- `INGEST_REQUIRE_AUTH`: reserved and unsupported in this prototype. Leave `false`; setting it to `true` fails fast at startup instead of silently running an unauthenticated ingest API.
 - `TIME_SYNC_REGION`: advisory region in `/api/v1/config`, default `CN`.
 - `TIME_SYNC_NTP_SERVERS`: comma-separated advisory NTP hosts in `/api/v1/config`; defaults to China-region public/cloud hosts.
 - `TIME_SYNC_MAX_ACCEPTABLE_RTT_MILLIS`: advisory client clock-sync RTT limit, default `3000`.
@@ -150,7 +150,7 @@ ClockSync troubleshooting:
 curl -fsS http://127.0.0.1:8000/api/v1/config
 ```
 
-The Android app syncs on resume and then every 60 seconds. It first tries the China-region NTP hosts advertised in `timeSync.recommendedNtpServers`. If UDP/123 is blocked, it falls back to the config response `serverTimeMillis`.
+The Android app syncs on resume and then every 60 seconds. It first tries the China-region NTP hosts advertised in `timeSync.recommendedNtpServers`. If UDP/123 is blocked, it falls back to the config response `serverTimeMillis`. Running sensor timestamps use the latest synced server offset rather than only the offset captured when collection started.
 
 The app uses these NTP hosts internally only. Home and Details display generic ClockSync sources such as `NTP synced` or `Server time fallback`; they do not display individual NTP server addresses.
 
@@ -175,7 +175,7 @@ Install on a test device:
 adb install -r artifacts/contextauthlab-debug.apk
 ```
 
-After installation, enable AccessibilityService, battery optimization exemption, and notification permission. The app starts collection automatically once required permissions, a valid research `device_id`, and screen/unlock state are ready. Server readiness, ClockSync, Wi-Fi, and rule refresh failures do not block local sampling; failed uploads are queued and replayed according to the Wi-Fi policy.
+After installation, enable AccessibilityService, battery optimization exemption, and notification permission. The app starts collection automatically once required permissions, a valid research `device_id`, and screen/unlock state are ready. Server readiness, ClockSync, Wi-Fi, and rule refresh failures do not block local sampling; failed uploads are queued and replayed according to the Wi-Fi policy. Non-retriable server responses during queue replay are moved to the dead-letter area instead of retrying until the maximum retry count.
 
 For UI verification, switch the device system language between Chinese and English and relaunch the app. Participant-facing screens, task instructions, protocol text, notification copy, settings, details, and dialogs should follow the system language.
 
@@ -294,4 +294,4 @@ server {
 
 ## Security
 
-Do not expose port 8000 directly to the public internet. Put the service behind a firewall and terminate TLS with Caddy or Nginx. This prototype does not enforce ingest authentication while `INGEST_REQUIRE_AUTH=false`, so public deployments must rely on firewall/reverse-proxy access control. The service runs as non-root `appuser` and uses bind-mounted host directories for direct research data access.
+Do not expose port 8000 directly to the public internet. Put the service behind a firewall and terminate TLS with Caddy or Nginx. This prototype does not enforce ingest authentication, so public deployments must rely on firewall/reverse-proxy access control. `INGEST_REQUIRE_AUTH=true` is intentionally rejected at startup until an authentication scheme is implemented. The service runs as non-root `appuser` and uses bind-mounted host directories for direct research data access.

@@ -90,7 +90,7 @@ class Envelope(BaseModel):
     batch_id: str
     rule_version: str
     rule_hash: str
-    created_at_wall_millis: int
+    created_at_wall_millis: int = Field(ge=0)
 
     @field_validator("device_id")
     @classmethod
@@ -346,10 +346,30 @@ class Batch(BaseModel):
                 raise ValueError("third_party_task_fields_must_be_null")
 
         for feature in self.context_features:
+            if feature.collection_source != self.collection_source:
+                raise ValueError("context_feature_collection_source_mismatch")
             if feature.task_category != self.task_category:
                 raise ValueError("context_feature_task_category_mismatch")
             if feature.task_id != self.task_id:
                 raise ValueError("context_feature_task_id_mismatch")
             if feature.task_sequence != self.task_sequence:
                 raise ValueError("context_feature_task_sequence_mismatch")
+            if feature.task_name != self.task_name:
+                raise ValueError("context_feature_task_name_mismatch")
+            if feature.task_intuitive_description != self.task_intuitive_description:
+                raise ValueError("context_feature_task_intuitive_description_mismatch")
+            if feature.task_session_id != self.task_session_id:
+                raise ValueError("context_feature_task_session_id_mismatch")
+        context_event_ids = {event.event_id for event in self.context_events}
+        for feature in self.context_features:
+            if feature.event_id not in context_event_ids:
+                raise ValueError("context_feature_event_id_not_found")
+        if self.diagnostics.sensor_sample_count != len(self.sensor_samples):
+            raise ValueError("diagnostics_sensor_sample_count_mismatch")
+        if self.diagnostics.context_event_count != len(self.context_events):
+            raise ValueError("diagnostics_context_event_count_mismatch")
+        if self.diagnostics.touch_event_count != len(self.touch_events):
+            raise ValueError("diagnostics_touch_event_count_mismatch")
+        if self.diagnostics.sampling_rate_hz is not None and self.diagnostics.sampling_rate_hz != self.sampling_rate_hz:
+            raise ValueError("diagnostics_sampling_rate_mismatch")
         return self

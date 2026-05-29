@@ -63,6 +63,7 @@ def make_batch(
     now = int(time.time() * 1000)
     is_builtin = task_category is not None
     task_name, task_intuition = TASK_META.get(task_category or "", (None, None))
+    context_event_id = str(uuid.uuid4())
     return {
         "batch_id": batch_id,
         "device_id": device_id,
@@ -118,7 +119,7 @@ def make_batch(
         ],
         "context_events": [
             {
-                "event_id": str(uuid.uuid4()),
+                "event_id": context_event_id,
                 "event_type": "TYPE_WINDOW_CONTENT_CHANGED",
                 "event_time_wall_millis": now - 4000,
                 "app_package_name": "com.example.target",
@@ -159,7 +160,7 @@ def make_batch(
         "context_features": [
             {
                 "feature_id": str(uuid.uuid4()),
-                "event_id": str(uuid.uuid4()),
+                "event_id": context_event_id,
                 "computed_at_wall_millis": now - 3500,
                 "collection_source": "BUILTIN_TASK" if is_builtin else "THIRD_PARTY_APP",
                 "task_sequence": int(task_category[1:]) if is_builtin else None,

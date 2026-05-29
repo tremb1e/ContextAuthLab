@@ -224,6 +224,38 @@ def test_task_category_must_be_null_when_third_party(server_client) -> None:
     assert response.json()["detail"] == "schema_validation_failed"
 
 
+def test_context_feature_must_reference_context_event(server_client) -> None:
+    batch = sample_batch()
+    batch["context_features"][0]["event_id"] = "missing-event"
+    response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
+    assert response.status_code == 400
+    assert response.json()["detail"] == "schema_validation_failed"
+
+
+def test_context_feature_task_metadata_must_match_batch(server_client) -> None:
+    batch = sample_batch()
+    batch["context_features"][0]["collection_source"] = "THIRD_PARTY_APP"
+    response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
+    assert response.status_code == 400
+    assert response.json()["detail"] == "schema_validation_failed"
+
+
+def test_diagnostics_counts_must_match_payload_arrays(server_client) -> None:
+    batch = sample_batch()
+    batch["diagnostics"]["touch_event_count"] = 99
+    response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
+    assert response.status_code == 400
+    assert response.json()["detail"] == "schema_validation_failed"
+
+
+def test_diagnostics_sampling_rate_must_match_batch(server_client) -> None:
+    batch = sample_batch()
+    batch["diagnostics"]["sampling_rate_hz"] = 50
+    response = server_client.post("/api/v1/ingest", json=envelope_for(batch))
+    assert response.status_code == 400
+    assert response.json()["detail"] == "schema_validation_failed"
+
+
 def test_envelope_batch_device_id_mismatch(server_client) -> None:
     batch = sample_batch()
     env = envelope_for(batch)
@@ -256,6 +288,14 @@ def test_ingest_accepts_rule_version_metadata_mismatch(server_client) -> None:
     env["rule_hash"] = "c" * 64
     response = server_client.post("/api/v1/ingest", json=env)
     assert response.status_code == 200
+
+
+def test_ingest_rejects_negative_envelope_created_at(server_client) -> None:
+    batch = sample_batch()
+    env = envelope_for(batch)
+    env["created_at_wall_millis"] = -1
+    response = server_client.post("/api/v1/ingest", json=env)
+    assert response.status_code == 400
 
 
 def test_error_log_no_plain_payload(server_client) -> None:

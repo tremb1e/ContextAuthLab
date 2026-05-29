@@ -23,10 +23,10 @@ The remote payload carries explicit policy metadata:
 
 - `max_text_length`: `128`.
 - `default_text_action`: `REDACT`.
-- `rule_hash`: SHA-256 over the rule payload excluding `rule_hash`.
+- `rule_hash`: SHA-256 over compact canonical JSON for the rule payload excluding `rule_hash`; object keys are sorted and separators contain no whitespace.
 - `rules`: default text rules for email, China mobile number, URL, China ID-like number, payment-card-like number, token-like strings, and long numbers.
 - `package_blocklist`: retained as an empty compatibility field; Android ignores package-name skip rules.
 
 Android treats remote rules as extensions rather than a hard dependency. Missing or mismatched `rule_hash` values, a failed rules request, or an invalid regex do not stop collection. Invalid regex entries are skipped, package-name targets are ignored, `content_description` rules apply only to content descriptions, and built-in baseline redaction remains active.
 
-Server does not rely on server-side redaction as primary protection and no longer performs the former secondary sensitive-string/prose/raw-field scan. It validates schema-level safety: editable nodes must not contain raw `text`, password nodes must be absent, and batches must report `diagnostics.redaction_applied: true`.
+Server does not rely on server-side redaction as primary protection and no longer performs the former secondary sensitive-string/prose/raw-field scan. It validates schema-level safety: editable nodes must not contain raw `text`, password nodes must be absent, batches must report `diagnostics.redaction_applied: true`, diagnostics counts must match the payload arrays, and context features must reference events in the same batch.

@@ -51,15 +51,16 @@ class SensorCollector(context: Context) : SensorEventListener {
     @Volatile
     private var running = false
     private var baseElapsedNanos = SystemClock.elapsedRealtimeNanos()
-    private var baseWallMillis = System.currentTimeMillis()
+    @Volatile
+    private var serverOffsetMillis = 0L
 
     fun start(serverOffsetMillis: Long) {
         if (running) return
+        this.serverOffsetMillis = serverOffsetMillis
         running = true
         synchronized(timestamps) { timestamps.clear() }
         resetMeasuredMetrics()
         baseElapsedNanos = SystemClock.elapsedRealtimeNanos()
-        baseWallMillis = System.currentTimeMillis() + serverOffsetMillis
         register(Sensor.TYPE_ACCELEROMETER)
         register(Sensor.TYPE_GYROSCOPE)
         register(Sensor.TYPE_MAGNETIC_FIELD)
@@ -83,6 +84,10 @@ class SensorCollector(context: Context) : SensorEventListener {
 
     fun currentBaseElapsedNanos(): Long = baseElapsedNanos
 
+    fun updateServerOffset(serverOffsetMillis: Long) {
+        this.serverOffsetMillis = serverOffsetMillis
+    }
+
     override fun onSensorChanged(event: SensorEvent) {
         if (!running) return
         val type = when (event.sensor.type) {
@@ -91,7 +96,8 @@ class SensorCollector(context: Context) : SensorEventListener {
             Sensor.TYPE_MAGNETIC_FIELD -> "MAGNETIC_FIELD"
             else -> return
         }
-        val wall = baseWallMillis + (event.timestamp - baseElapsedNanos) / 1_000_000L
+        val eventAgeMillis = ((SystemClock.elapsedRealtimeNanos() - event.timestamp) / 1_000_000L).coerceAtLeast(0L)
+        val wall = System.currentTimeMillis() - eventAgeMillis + serverOffsetMillis
         val sample = SensorSample(
             sensorType = type,
             timestampElapsedNanos = event.timestamp,

@@ -45,6 +45,7 @@ def sample_batch(
         "task_started_at_wall_millis": 1710000000000 if collection_source == "BUILTIN_TASK" else None,
         "task_elapsed_seconds_at_batch_end": 5 if collection_source == "BUILTIN_TASK" else None,
     }
+    context_event_id = str(uuid.uuid4())
     return {
         "batch_id": batch_uuid,
         "device_id": device_id,
@@ -93,7 +94,7 @@ def sample_batch(
         ],
         "context_events": [
             {
-                "event_id": str(uuid.uuid4()),
+                "event_id": context_event_id,
                 "event_type": "TYPE_WINDOW_CONTENT_CHANGED",
                 "event_time_wall_millis": 1710000000123,
                 "app_package_name": "com.example.target",
@@ -134,7 +135,7 @@ def sample_batch(
         "context_features": [
             {
                 "feature_id": str(uuid.uuid4()),
-                "event_id": str(uuid.uuid4()),
+                "event_id": context_event_id,
                 "computed_at_wall_millis": 1710000000200,
                 "collection_source": collection_source,
                 "task_sequence": task_fields["task_sequence"],

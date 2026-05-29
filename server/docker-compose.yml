@@ -43,7 +43,7 @@ services:
       TIME_SYNC_MAX_ACCEPTABLE_RTT_MILLIS: ${TIME_SYNC_MAX_ACCEPTABLE_RTT_MILLIS:-3000}
       TZ: ${TZ:-UTC}
     ports:
-      - "${SERVER_BIND:-127.0.0.1}:${SERVER_PORT:-14000}:8000"
+      - "${SERVER_BIND:-127.0.0.1}:${SERVER_PORT:-8000}:8000"
     volumes: *cca-server-volumes
     security_opt:
       - no-new-privileges:true

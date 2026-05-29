@@ -60,12 +60,15 @@ class Settings:
         rules_file = Path(rules_file_env).expanduser().resolve() if rules_file_env else (data_dir / "rules.json").resolve()
         log_dir = Path(os.getenv("SERVER_LOG_DIR", "./logs")).resolve()
         ntp_servers = _csv_env_values("TIME_SYNC_NTP_SERVERS") or DEFAULT_TIME_SYNC_NTP_SERVERS
+        ingest_require_auth = os.getenv("INGEST_REQUIRE_AUTH", "false").lower() == "true"
+        if ingest_require_auth:
+            raise ValueError("INGEST_REQUIRE_AUTH_unsupported")
         return cls(
             data_dir=data_dir,
             rules_file=rules_file,
             study_salt_env=os.getenv("SERVER_STUDY_SALT"),
             rules_version=os.getenv("RULES_VERSION", "1"),
-            ingest_require_auth=os.getenv("INGEST_REQUIRE_AUTH", "false").lower() == "true",
+            ingest_require_auth=ingest_require_auth,
             min_free_bytes=_non_negative_int_env("SERVER_MIN_FREE_BYTES", 10 * 1024 * 1024),
             log_dir=log_dir,
             time_sync_region=os.getenv("TIME_SYNC_REGION", DEFAULT_TIME_SYNC_REGION),

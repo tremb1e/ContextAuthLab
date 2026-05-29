@@ -32,4 +32,8 @@ root keeps category indexes usable.
 
 Quarantine files do not store rejected plaintext verbatim. They store `reason`, payload SHA-256, payload type, and top-level JSON keys so failure analysis cannot leak suspicious raw text through error paths.
 
+Schema validation rejects mismatched diagnostics counts, context features whose
+event IDs do not refer to `context_events` in the same batch, and feature
+source/task metadata that diverges from the enclosing batch.
+
 All device paths are guarded by the `^[a-f0-9]{64}$` device ID regex and safe path resolution.

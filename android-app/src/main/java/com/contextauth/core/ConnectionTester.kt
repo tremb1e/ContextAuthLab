@@ -17,7 +17,7 @@ class ConnectionTester(private val client: OkHttpClient) {
             client.newCall(request).execute().use { response ->
                 val rtt = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
                 val body = response.body?.string()?.take(120).orEmpty()
-                if (!response.isSuccessful) error("HTTP ${response.code}, ${rtt}ms")
+                if (!response.isSuccessful) error("HTTP ${response.code}, ${rtt}ms, ${body.ifBlank { "error" }}")
                 "HTTP ${response.code}, ${rtt}ms, ${body.ifBlank { "ok" }}"
             }
         }

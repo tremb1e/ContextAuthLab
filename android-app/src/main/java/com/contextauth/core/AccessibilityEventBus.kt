@@ -27,3 +27,8 @@ object TouchEventBus {
         mutableEvents.tryEmit(event)
     }
 }
+
+object AccessibilityCollectionGate {
+    @Volatile
+    var active: Boolean = false
+}

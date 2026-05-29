@@ -9,13 +9,14 @@ Current scope:
 - Android records only global screen touch interaction start/end timestamps while collection is active; it does not upload touch positions, trajectories, pressure, or size.
 - Android drops input-field text and password nodes, and redacts fixed-format sensitive strings before upload.
 - Android starts collection automatically when consent, Accessibility, battery optimization, notification permission, a valid research `device_id`, and screen/unlock state are ready. Server readiness, ClockSync, Wi-Fi, and rule refresh failures do not block local collection; upload queues until policy/network conditions allow delivery.
-- Android performs ClockSync on app entry and every 60 seconds, using China-region NTP hosts first and falling back to server config time when UDP NTP is unavailable.
+- Android performs ClockSync on app entry and every 60 seconds, using China-region NTP hosts first and falling back to server config time when UDP NTP is unavailable. Running sensor wall-time estimates use the latest synced server offset.
 - Android localizes participant-facing UI, task copy, protocol text, details, settings, dialogs, and notification copy to Chinese or English based on system language.
 - Android Home's `Collection Status` card reports server connection state, automatic collection state, latest connectivity-test time, latest upload time, and latest server response. Tapping the server connection chip starts a fresh `/ready` readiness test; NTP host names are not displayed in app UI.
 - Android Home reminds for missing Accessibility, battery optimization, and notification permissions one by one, while excluding server reachability and ClockSync from permission prompts.
 - Android Details replaces Diagnostics and shows runtime, app/device, sensor, ScreenGate, upload/performance, local upload history, and ClockSync details without a one-click Diagnostics export button.
 - Android serializes redacted batches as UTF-8 JSON, compresses them with LZ4 frame, and uploads a payload envelope every batch interval.
 - Server is a pure FastAPI API and disk storage service. It receives envelopes, verifies SHA-256, decompresses LZ4 frame, validates schema, serves config/rules, and stores by `device_id`. The previous server-side secondary UI/text scan has been removed; client-side redaction is the primary protection.
+- `INGEST_REQUIRE_AUTH` is reserved and unsupported in this prototype; setting it to `true` fails fast rather than giving a false sense of authenticated ingest.
 
 Not implemented in this stage: authentication models, context routing models, MoE, training code, inference code, external rule-management consoles, or server frontend pages.
 
@@ -49,15 +50,15 @@ cd ContextAuthLab
 JAVA_HOME=/opt/android-studio/jbr ANDROID_HOME=/home/tremb1e/Android/Sdk ./gradlew :android-app:testDebugUnitTest :android-app:assembleDebug
 ```
 
-Enable AccessibilityService on device: Android Settings -> Accessibility -> ContextAuthLab -> enable, then return to the app. Also allow battery optimization exemption and notification permission.
+Enable AccessibilityService on device: Android Settings -> Accessibility -> ContextAuthLab -> enable, then return to the app. Also allow battery optimization exemption and notification permission. The service only traverses UI windows while collection is active, uses the exact service component for permission checks, and catches framework/OEM Accessibility exceptions so a bad event does not crash the service.
 
 The target app flow is: Consent -> permission onboarding -> Home. When the three permissions, a valid research `device_id`, and screen/unlock state are satisfied, collection starts automatically; there is no third-party collection opt-in/out switch. Upload keeps sensor-only batches and also includes Accessibility UI context and global timing-only touch events when present. Server `/ready`, ClockSync, Wi-Fi, and rule refresh run in the background and affect upload/retry metadata rather than blocking on-device sampling. The hidden researcher server switch is available through the version/footer gesture and the Home server-host gesture. C0-C7 built-in tasks record `task_id`, `task_sequence`, English `task_name`, English `task_intuitive_description`, and a non-empty `session_id`.
 
 Task updates:
 
 - C5 is now a fullscreen landscape blue-ball tapping challenge. Tap Start to enter a game-like full-screen surface, hit 30 randomly positioned balls, then the task passes and returns to the portrait task page.
-- C6 is local fullscreen video playback from `android-app/src/main/res/raw/c6_video.mp4`. Tap Play to enter a real full-screen player; pause, seek, playback speed, and portrait/landscape controls are overlaid inside the video component.
-- The previous wrist task is now C7 and includes left-right swing, lateral translation, and forward-back flexion animations.
+- C6 is local fullscreen video playback from `android-app/src/main/res/raw/c6_video.mp4`. Tap Play to enter a real full-screen player; pause, seek, playback speed, and portrait/landscape controls are overlaid inside the video component. Controls auto-hide after 2 seconds without interaction and reappear on tap.
+- The previous wrist task is now C7 and includes left-right swing, lateral translation, and forward-back flexion animations. The lateral-translation panel uses a front-facing view that shows the fixed arm, wrist pivot, hand holding the phone tail, and fan-shaped path.
 
 ## Server
 

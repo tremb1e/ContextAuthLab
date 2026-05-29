@@ -116,6 +116,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -125,6 +126,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.view.WindowCompat
@@ -1037,6 +1039,8 @@ private fun VideoWatchingTask(onInteractionStart: () -> Unit) {
     var seekFraction by remember { mutableStateOf(0f) }
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
     var videoView by remember { mutableStateOf<VideoView?>(null) }
+    var controlsVisible by remember { mutableStateOf(true) }
+    var controlsTouchTick by remember { mutableIntStateOf(0) }
 
     fun closePlayer() {
         videoView?.stopPlayback()
@@ -1046,6 +1050,10 @@ private fun VideoWatchingTask(onInteractionStart: () -> Unit) {
         playing = false
         activated = false
         landscape = true
+    }
+    fun showControls() {
+        controlsVisible = true
+        controlsTouchTick += 1
     }
     fun applySpeed() {
         if (Build.VERSION.SDK_INT >= 23) {
@@ -1070,6 +1078,12 @@ private fun VideoWatchingTask(onInteractionStart: () -> Unit) {
 
     LaunchedEffect(mediaPlayer, speed) {
         applySpeed()
+    }
+    LaunchedEffect(activated, controlsVisible, controlsTouchTick, seeking) {
+        if (activated && controlsVisible && !seeking) {
+            delay(2_000)
+            controlsVisible = false
+        }
     }
     LaunchedEffect(activated, prepared, seeking) {
         while (activated && prepared) {
@@ -1099,6 +1113,7 @@ private fun VideoWatchingTask(onInteractionStart: () -> Unit) {
                 onClick = {
                     activated = true
                     landscape = true
+                    showControls()
                     if (!interactionStarted) {
                         interactionStarted = true
                         onInteractionStart()
@@ -1144,9 +1159,6 @@ private fun VideoWatchingTask(onInteractionStart: () -> Unit) {
                                     start()
                                     playing = true
                                 }
-                                setOnClickListener {
-                                    setPlayback(!isPlaying)
-                                }
                             }
                         },
                         update = { view ->
@@ -1154,73 +1166,108 @@ private fun VideoWatchingTask(onInteractionStart: () -> Unit) {
                             if (!playing && view.isPlaying) view.pause()
                         }
                     )
-                    IconButton(
-                        onClick = { closePlayer() },
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(12.dp)
-                            .clip(RoundedCornerShape(24.dp))
-                            .background(Color.Black.copy(alpha = 0.58f))
-                    ) {
-                        Icon(Icons.Outlined.Close, contentDescription = l("关闭播放器", "Close player"), tint = Color.White)
-                    }
-                    Column(
-                        Modifier
-                            .align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .background(Color.Black.copy(alpha = 0.68f))
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        val sliderValue = if (seeking) seekFraction else (videoPositionMs.toFloat() / videoDurationMs.toFloat()).coerceIn(0f, 1f)
-                        Slider(
-                            value = sliderValue,
-                            onValueChange = {
-                                seeking = true
-                                seekFraction = it
-                            },
-                            onValueChangeFinished = {
-                                val target = (seekFraction * videoDurationMs).roundToInt().coerceIn(0, videoDurationMs)
-                                videoView?.seekTo(target)
-                                videoPositionMs = target
-                                seeking = false
-                            },
-                            modifier = Modifier.fillMaxWidth()
+                    if (!controlsVisible) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .pointerInput(activated) {
+                                    detectTapGestures { showControls() }
+                                }
                         )
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                    }
+                    if (controlsVisible) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .pointerInput(controlsVisible) {
+                                    detectTapGestures { controlsVisible = false }
+                                }
+                        )
+                        IconButton(
+                            onClick = { closePlayer() },
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(14.dp)
+                                .clip(RoundedCornerShape(24.dp))
+                                .background(Color.Black.copy(alpha = 0.58f))
                         ) {
-                            IconButton(
-                                onClick = { setPlayback(!playing) },
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(24.dp))
-                                    .background(Color.White.copy(alpha = 0.16f))
-                            ) {
-                                Icon(
-                                    if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
-                                    contentDescription = if (playing) l("暂停", "Pause") else l("播放", "Play"),
-                                    tint = Color.White
-                                )
-                            }
-                            Text(
-                                "${formatDuration(videoPositionMs)} / ${formatDuration(videoDurationMs)}",
-                                color = Color.White,
-                                modifier = Modifier.weight(1f)
+                            Icon(Icons.Outlined.Close, contentDescription = l("关闭播放器", "Close player"), tint = Color.White)
+                        }
+                        Column(
+                            Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .background(Color.Black.copy(alpha = 0.68f))
+                                .padding(horizontal = 24.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            val sliderValue = if (seeking) seekFraction else (videoPositionMs.toFloat() / videoDurationMs.toFloat()).coerceIn(0f, 1f)
+                            Slider(
+                                value = sliderValue,
+                                onValueChange = {
+                                    showControls()
+                                    seeking = true
+                                    seekFraction = it
+                                },
+                                onValueChangeFinished = {
+                                    val target = (seekFraction * videoDurationMs).roundToInt().coerceIn(0, videoDurationMs)
+                                    videoView?.seekTo(target)
+                                    videoPositionMs = target
+                                    seeking = false
+                                    showControls()
+                                },
+                                modifier = Modifier.fillMaxWidth()
                             )
-                            listOf(0.75f, 1.0f, 1.25f, 1.5f).forEach { option ->
-                                FilterChip(
-                                    selected = speed == option,
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IconButton(
                                     onClick = {
-                                        speed = option
-                                        applySpeed()
+                                        showControls()
+                                        setPlayback(!playing)
                                     },
-                                    label = { Text("${option}x") }
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(24.dp))
+                                        .background(Color.White.copy(alpha = 0.16f))
+                                ) {
+                                    Icon(
+                                        if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                                        contentDescription = if (playing) l("暂停", "Pause") else l("播放", "Play"),
+                                        tint = Color.White
+                                    )
+                                }
+                                Text(
+                                    "${formatDuration(videoPositionMs)} / ${formatDuration(videoDurationMs)}",
+                                    color = Color.White,
+                                    modifier = Modifier.weight(1f)
                                 )
+                                OutlinedButton(
+                                    onClick = {
+                                        showControls()
+                                        landscape = !landscape
+                                    }
+                                ) {
+                                    Text(if (landscape) l("竖屏", "Portrait") else l("横屏", "Landscape"))
+                                }
                             }
-                            OutlinedButton(onClick = { landscape = !landscape }) {
-                                Text(if (landscape) l("竖屏", "Portrait") else l("横屏", "Landscape"))
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                listOf(0.75f, 1.0f, 1.25f, 1.5f).forEach { option ->
+                                    FilterChip(
+                                        selected = speed == option,
+                                        onClick = {
+                                            showControls()
+                                            speed = option
+                                            applySpeed()
+                                        },
+                                        label = { Text("${option}x") }
+                                    )
+                                }
                             }
                         }
                     }
@@ -1233,23 +1280,27 @@ private fun VideoWatchingTask(onInteractionStart: () -> Unit) {
 @Composable
 private fun FullscreenSessionEffect(orientation: Int) {
     val activity = LocalContext.current.findActivity()
-    DisposableEffect(activity, orientation) {
-        val window = activity?.window
+    val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
+    DisposableEffect(activity, dialogWindow, orientation) {
+        val activityWindow = activity?.window
+        val targetWindow = dialogWindow ?: activityWindow
         activity?.requestedOrientation = orientation
-        window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        if (window != null) {
-            WindowCompat.setDecorFitsSystemWindows(window, false)
-            WindowInsetsControllerCompat(window, window.decorView).apply {
+        activityWindow?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        targetWindow?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (targetWindow != null) {
+            WindowCompat.setDecorFitsSystemWindows(targetWindow, false)
+            WindowInsetsControllerCompat(targetWindow, targetWindow.decorView).apply {
                 hide(WindowInsetsCompat.Type.systemBars())
                 systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
         }
         onDispose {
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            if (window != null) {
-                WindowCompat.setDecorFitsSystemWindows(window, true)
-                WindowInsetsControllerCompat(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
+            activityWindow?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            targetWindow?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            if (targetWindow != null) {
+                WindowCompat.setDecorFitsSystemWindows(targetWindow, true)
+                WindowInsetsControllerCompat(targetWindow, targetWindow.decorView).show(WindowInsetsCompat.Type.systemBars())
             }
         }
     }
@@ -1301,9 +1352,9 @@ private fun WristRotationGuide() {
                 )
                 WristMotionPanel(
                     label = l("左右平移", "Lateral translation"),
-                    viewBadge = l("俯视图 · 屏幕始终平行面部", "Top view · screen stays parallel"),
-                    hint = l("手机沿扇形轨迹左右移动，但蓝色屏幕平面始终与橙色人脸平面平行。", "Move the phone left/right along a fan-shaped path while keeping the blue screen plane parallel to the orange face plane."),
-                    detail = l("小臂尽量不动，像扇形一样摆动手掌；不要让手机屏幕跟着旋转。", "Keep the forearm still and sweep the hand like a fan; do not rotate the phone screen."),
+                    viewBadge = l("正视图 · 面向使用者", "Front view · facing user"),
+                    hint = l("正面观察：手掌握住手机尾部，大臂和小臂固定，手机在手腕带动下沿扇形轨迹左右扫动。", "Front view: the hand holds the phone tail, upper arm and forearm stay fixed, and the wrist sweeps the phone left/right along a fan-shaped path."),
+                    detail = l("轨迹是扇形弧线，转动轴在手腕；请不要移动整条手臂。", "The path is a fan-shaped arc around the wrist; do not move the whole arm."),
                     angle = translateAngle,
                     mode = WristMotionMode.LATERAL_TRANSLATION,
                     facePlaneColor = facePlaneColor,
@@ -1340,9 +1391,9 @@ private fun WristRotationGuide() {
                 )
                 WristMotionPanel(
                     label = l("左右平移", "Lateral translation"),
-                    viewBadge = l("俯视图 · 屏幕始终平行面部", "Top view · screen stays parallel"),
-                    hint = l("手机沿扇形轨迹左右移动，但蓝色屏幕平面始终与橙色人脸平面平行。", "Move the phone left/right along a fan-shaped path while keeping the blue screen plane parallel to the orange face plane."),
-                    detail = l("小臂尽量不动，像扇形一样摆动手掌；不要让手机屏幕跟着旋转。", "Keep the forearm still and sweep the hand like a fan; do not rotate the phone screen."),
+                    viewBadge = l("正视图 · 面向使用者", "Front view · facing user"),
+                    hint = l("正面观察：手掌握住手机尾部，大臂和小臂固定，手机在手腕带动下沿扇形轨迹左右扫动。", "Front view: the hand holds the phone tail, upper arm and forearm stay fixed, and the wrist sweeps the phone left/right along a fan-shaped path."),
+                    detail = l("轨迹是扇形弧线，转动轴在手腕；请不要移动整条手臂。", "The path is a fan-shaped arc around the wrist; do not move the whole arm."),
                     angle = translateAngle,
                     mode = WristMotionMode.LATERAL_TRANSLATION,
                     facePlaneColor = facePlaneColor,
@@ -1528,7 +1579,137 @@ private fun WristMotionPanel(
                     center = Offset(size.width / 2f, size.height * 0.55f),
                 )
 
-                if (mode == WristMotionMode.SIDE_TO_SIDE || mode == WristMotionMode.LATERAL_TRANSLATION) {
+                if (mode == WristMotionMode.LATERAL_TRANSLATION) {
+                    // ============== FRONT VIEW (facing the participant) ==============
+                    val cx = size.width / 2f
+                    val faceCenter = Offset(cx, size.height * 0.20f)
+                    val faceRadius = minSide * 0.100f
+                    val shoulderY = size.height * 0.42f
+                    val wrist = Offset(cx, size.height * 0.78f)
+                    val armWidth = minSide * 0.090f
+                    val arcRadius = minSide * 0.36f
+                    val baseArcPoint = Offset(cx, wrist.y - arcRadius)
+                    val phoneWidth = minSide * 0.150f
+                    val phoneHeight = minSide * 0.300f
+                    val phoneCenter = rotatePoint(baseArcPoint, wrist, angle)
+                    val progress = (angle / angleRange).coerceIn(-1f, 1f)
+                    val palmCenter = Offset(
+                        x = phoneCenter.x,
+                        y = phoneCenter.y + phoneHeight * 0.47f
+                    )
+
+                    // head and face, front-facing
+                    drawCircle(hair, radius = faceRadius * 1.10f, center = faceCenter)
+                    drawCircle(skin, radius = faceRadius, center = faceCenter + Offset(0f, faceRadius * 0.04f))
+                    drawCircle(skinShadow, radius = faceRadius, center = faceCenter + Offset(0f, faceRadius * 0.04f), style = Stroke(width = minSide * 0.005f))
+                    drawCircle(faceFeature, radius = minSide * 0.010f, center = faceCenter + Offset(-faceRadius * 0.34f, -faceRadius * 0.08f))
+                    drawCircle(faceFeature, radius = minSide * 0.010f, center = faceCenter + Offset(faceRadius * 0.34f, -faceRadius * 0.08f))
+                    drawLine(skinShadow, faceCenter + Offset(0f, faceRadius * 0.03f), faceCenter + Offset(0f, faceRadius * 0.31f), strokeWidth = minSide * 0.008f)
+                    drawLine(skinShadow, faceCenter + Offset(-faceRadius * 0.26f, faceRadius * 0.53f), faceCenter + Offset(faceRadius * 0.26f, faceRadius * 0.53f), strokeWidth = minSide * 0.009f)
+
+                    // fixed shoulder/arm frame
+                    drawLine(skinDark, Offset(cx - minSide * 0.36f, shoulderY), Offset(cx + minSide * 0.36f, shoulderY), strokeWidth = minSide * 0.034f)
+                    drawRoundRect(
+                        color = skinDark,
+                        topLeft = Offset(wrist.x - armWidth / 2f, shoulderY - minSide * 0.010f),
+                        size = Size(armWidth, wrist.y - shoulderY + minSide * 0.030f),
+                        cornerRadius = CornerRadius(armWidth / 2f, armWidth / 2f),
+                    )
+                    drawRoundRect(
+                        color = skin,
+                        topLeft = Offset(wrist.x - armWidth * 0.38f, shoulderY),
+                        size = Size(armWidth * 0.76f, wrist.y - shoulderY + minSide * 0.018f),
+                        cornerRadius = CornerRadius(armWidth / 2f, armWidth / 2f),
+                    )
+                    drawLabel(l("大臂/小臂固定", "Arm fixed"), cx + minSide * 0.085f, shoulderY + minSide * 0.045f, Paint.Align.LEFT, skinShadow.toArgb())
+
+                    // fan-shaped wrist trajectory
+                    drawArc(
+                        color = arcColor.copy(alpha = 0.70f),
+                        startAngle = 270f - angleRange,
+                        sweepAngle = angleRange * 2f,
+                        useCenter = false,
+                        topLeft = Offset(wrist.x - arcRadius, wrist.y - arcRadius),
+                        size = Size(arcRadius * 2f, arcRadius * 2f),
+                        style = Stroke(width = minSide * 0.025f),
+                    )
+                    listOf(-angleRange, 0f, angleRange).forEach { ghostAngle ->
+                        val ghost = rotatePoint(baseArcPoint, wrist, ghostAngle)
+                        drawLine(motionColor.copy(alpha = 0.22f), wrist, ghost, strokeWidth = minSide * 0.009f)
+                        drawCircle(endpointColor, radius = minSide * 0.016f, center = ghost)
+                    }
+                    val arrowStart = rotatePoint(baseArcPoint, wrist, -angleRange * 0.64f)
+                    val arrowMid = rotatePoint(baseArcPoint, wrist, 0f)
+                    val arrowEnd = rotatePoint(baseArcPoint, wrist, angleRange * 0.64f)
+                    drawLine(motionColor, arrowStart, arrowMid, strokeWidth = minSide * 0.010f)
+                    drawArrow(
+                        color = motionColor,
+                        start = arrowMid,
+                        end = arrowEnd,
+                        strokeWidth = minSide * 0.010f,
+                        headLength = minSide * 0.035f,
+                    )
+                    drawLabel(l("扇形轨迹", "Fan path"), cx + minSide * 0.19f, wrist.y - arcRadius * 0.73f, Paint.Align.LEFT, motionColor.toArgb(), bold = true)
+
+                    // ghost phones along the arc to clarify the path.
+                    listOf(-angleRange, angleRange).forEach { ghostAngle ->
+                        val ghost = rotatePoint(baseArcPoint, wrist, ghostAngle)
+                        drawRoundRect(
+                            color = phone.copy(alpha = 0.14f),
+                            topLeft = Offset(ghost.x - phoneWidth / 2f, ghost.y - phoneHeight / 2f),
+                            size = Size(phoneWidth, phoneHeight),
+                            cornerRadius = CornerRadius(minSide * 0.026f, minSide * 0.026f),
+                        )
+                    }
+
+                    // current palm holding the tail of the phone.
+                    drawCircle(skinDark, radius = minSide * 0.064f, center = palmCenter + Offset(0f, minSide * 0.007f))
+                    drawCircle(skin, radius = minSide * 0.058f, center = palmCenter)
+                    for (index in -2..2) {
+                        val fingerX = palmCenter.x + index * minSide * 0.026f
+                        drawLine(
+                            color = skinDark,
+                            start = Offset(fingerX, palmCenter.y - minSide * 0.046f),
+                            end = Offset(fingerX + progress * minSide * 0.012f, palmCenter.y + minSide * 0.042f),
+                            strokeWidth = minSide * 0.010f,
+                        )
+                    }
+                    drawLine(skinDark, wrist, palmCenter, strokeWidth = minSide * 0.030f)
+                    drawLine(skin, wrist, palmCenter, strokeWidth = minSide * 0.022f)
+
+                    drawRoundRect(
+                        color = phone,
+                        topLeft = Offset(phoneCenter.x - phoneWidth / 2f, phoneCenter.y - phoneHeight / 2f),
+                        size = Size(phoneWidth, phoneHeight),
+                        cornerRadius = CornerRadius(minSide * 0.026f, minSide * 0.026f),
+                    )
+                    drawRoundRect(
+                        color = phoneEdge,
+                        topLeft = Offset(phoneCenter.x - phoneWidth / 2f, phoneCenter.y - phoneHeight / 2f),
+                        size = Size(phoneWidth, phoneHeight),
+                        cornerRadius = CornerRadius(minSide * 0.026f, minSide * 0.026f),
+                        style = Stroke(width = minSide * 0.005f),
+                    )
+                    drawRoundRect(
+                        color = phoneScreenFill,
+                        topLeft = Offset(phoneCenter.x - phoneWidth * 0.39f, phoneCenter.y - phoneHeight * 0.38f),
+                        size = Size(phoneWidth * 0.78f, phoneHeight * 0.70f),
+                        cornerRadius = CornerRadius(minSide * 0.016f, minSide * 0.016f),
+                    )
+                    drawArrow(
+                        color = screenPlaneColor,
+                        start = phoneCenter,
+                        end = Offset(phoneCenter.x, phoneCenter.y - phoneHeight * 0.38f),
+                        strokeWidth = minSide * 0.012f,
+                        headLength = minSide * 0.034f,
+                    )
+                    drawLabel(screenArrowLabel, phoneCenter.x + phoneWidth * 0.56f, phoneCenter.y - phoneHeight * 0.30f, Paint.Align.LEFT, screenPlaneColor.toArgb())
+
+                    drawCircle(panelSurface, radius = minSide * 0.030f, center = wrist)
+                    drawCircle(motionColor, radius = minSide * 0.026f, center = wrist, style = Stroke(width = minSide * 0.008f))
+                    drawCircle(motionColor.copy(alpha = 0.85f), radius = minSide * 0.012f, center = wrist)
+                    drawLabel(pivotLabel, wrist.x, wrist.y + minSide * 0.060f, Paint.Align.CENTER, motionColor.toArgb())
+                } else if (mode == WristMotionMode.SIDE_TO_SIDE) {
                     // ============== TOP-DOWN VIEW (bird's-eye) ==============
                     val cx = size.width / 2f
                     val headCenter = Offset(cx, size.height * 0.20f)
@@ -1672,22 +1853,7 @@ private fun WristMotionPanel(
                         }
                     }
 
-                    val screenLabelAnchor = if (mode == WristMotionMode.LATERAL_TRANSLATION) {
-                        listOf(-angleRange, angleRange).forEach { ghostAngle ->
-                            val ghost = rotatePoint(baseArcPoint, wrist, ghostAngle)
-                            drawPhoneTopView(
-                                alpha = 0.15f,
-                                withArrow = false,
-                                phoneCx = cx + (ghost.x - baseArcPoint.x),
-                                phoneCy = phoneCenterY + (ghost.y - baseArcPoint.y)
-                            )
-                        }
-                        val current = rotatePoint(baseArcPoint, wrist, angle)
-                        val currentCx = cx + (current.x - baseArcPoint.x)
-                        val currentCy = phoneCenterY + (current.y - baseArcPoint.y)
-                        drawPhoneTopView(alpha = 1f, withArrow = true, phoneCx = currentCx, phoneCy = currentCy)
-                        Offset(currentCx + minSide * 0.090f, currentCy - phoneThickness / 2f - minSide * 0.136f)
-                    } else {
+                    val screenLabelAnchor = run {
                         listOf(-angleRange, angleRange).forEach { ghostAngle ->
                             rotate(ghostAngle, pivot = wrist) { drawPhoneTopView(alpha = 0.15f, withArrow = false) }
                         }
