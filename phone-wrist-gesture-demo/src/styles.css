@@ -1,0 +1,751 @@
+/*
+  统一运动坐标系与图层规则
+  - 正面场景: 人脸固定在上方, 手腕支点固定在下方, 大臂/前臂是固定灰色层。
+  - 侧视场景: 人脸固定在左侧, 手机在右侧, 手腕支点在右下方。
+  - fixed-layer: 人脸、人脸平面、大臂、小臂、手腕 pivot、运动轨迹、标签和残影。
+  - moving-layer: 只有右手手掌、手机、手机屏幕平面和屏幕法向箭头。
+  - 任何动画 transform 都只绑定到 moving-layer / anim-target, 不会作用到前臂、大臂或人脸。
+*/
+:root {
+  color-scheme: light;
+  --bg: #f6f7fb;
+  --surface: #ffffff;
+  --frame: #fbfcff;
+  --line: #e2e6ef;
+  --ink: #202634;
+  --muted: #626c7f;
+  --faint: #8a94a6;
+  --fixed: #929daf;
+  --fixed-soft: #c7cedb;
+  --fixed-fill: #eef1f6;
+  --accent: #4267e8;
+  --accent-deep: #2949bd;
+  --accent-soft: #dbe3ff;
+  --accent-faint: rgba(66, 103, 232, 0.11);
+  --hand: #fefeff;
+  --shadow: 0 8px 24px rgba(32, 38, 52, 0.08);
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.motion-page {
+  min-height: 100vh;
+  padding: max(18px, env(safe-area-inset-top)) 14px calc(86px + env(safe-area-inset-bottom));
+}
+
+.app-shell {
+  max-width: 1130px;
+  margin: 0 auto;
+}
+
+.app-header {
+  margin: 0 auto 16px;
+  text-align: center;
+}
+
+.app-header h1 {
+  margin: 4px 0 4px;
+  font-size: 28px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.app-header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.scene-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.gesture-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-title span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.card-title h2 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.scene-meta {
+  margin: 4px 0 8px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.motion-frame {
+  width: 100%;
+  aspect-ratio: 360 / 430;
+  overflow: hidden;
+  border: 1px solid #edf0f5;
+  border-radius: 8px;
+  background: var(--frame);
+}
+
+.motion-frame svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.caption {
+  margin: 9px 0 0;
+  color: var(--accent-deep);
+  text-align: center;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.stage-bg {
+  fill: #ffffff;
+}
+
+.floor-line {
+  fill: none;
+  stroke: #edf0f5;
+  stroke-width: 2;
+}
+
+.ln-fixed,
+.ln-fixed-thin {
+  fill: none;
+  stroke: var(--fixed);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ln-fixed {
+  stroke-width: 3;
+}
+
+.ln-fixed-thin {
+  stroke-width: 2;
+}
+
+.fill-none {
+  fill: none;
+}
+
+.face-fill,
+.arm-fill {
+  fill: var(--fixed-fill);
+  stroke: var(--fixed-soft);
+  stroke-width: 2.5;
+}
+
+.fixed-dot {
+  fill: var(--fixed);
+}
+
+.thick-arm {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 20;
+}
+
+.lock-body {
+  fill: var(--fixed-soft);
+}
+
+.lock-shackle {
+  fill: none;
+  stroke: var(--fixed-soft);
+  stroke-linecap: round;
+  stroke-width: 2.2;
+}
+
+.phone-body {
+  fill: #ffffff;
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.phone-screen {
+  fill: var(--accent-faint);
+  stroke: var(--accent);
+  stroke-width: 1.35;
+}
+
+.phone-camera,
+.pivot-dot {
+  fill: var(--accent);
+}
+
+.phone-axis {
+  stroke: var(--accent);
+  stroke-width: 2.4;
+  stroke-dasharray: 5 4;
+  stroke-linecap: round;
+}
+
+.screen-plane,
+.screen-plane-rect {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.8;
+}
+
+.face-plane {
+  fill: none;
+  stroke: var(--fixed);
+  stroke-width: 2.7;
+  stroke-dasharray: 4 5;
+  stroke-linecap: round;
+}
+
+.motion-path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-dasharray: 7 7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.direction-arrow,
+.normal-arrow {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.direction-arrow {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.normal-arrow {
+  stroke-width: 2.6;
+}
+
+.normal-accent {
+  stroke: var(--accent);
+}
+
+.normal-fixed {
+  stroke: var(--fixed);
+}
+
+.ghost-phone {
+  fill: rgba(66, 103, 232, 0.045);
+  stroke: var(--accent);
+  stroke-width: 2;
+  opacity: 0.28;
+}
+
+.ghost-screen {
+  fill: rgba(66, 103, 232, 0.07);
+  stroke: var(--accent);
+  stroke-width: 1;
+  opacity: 0.34;
+}
+
+.hand-fill {
+  fill: var(--hand);
+  stroke: var(--accent-deep);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.5;
+}
+
+.finger-line {
+  fill: none;
+  stroke: var(--accent-deep);
+  stroke-linecap: round;
+  stroke-width: 1.8;
+  opacity: 0.85;
+}
+
+.pivot-ring {
+  fill: #ffffff;
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.pivot-halo {
+  fill: var(--accent);
+  opacity: 0.18;
+}
+
+.label-box {
+  fill: #ffffff;
+  stroke: var(--line);
+  stroke-width: 1.1;
+}
+
+.label-box-accent {
+  fill: #eef2ff;
+  stroke: #b8c5ff;
+  stroke-width: 1.1;
+}
+
+.label-text,
+.label-text-accent,
+.small-text {
+  font-family: inherit;
+  letter-spacing: 0;
+}
+
+.label-text {
+  fill: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.label-text-accent {
+  fill: var(--accent-deep);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.small-text {
+  fill: var(--faint);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.ruler-tick {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.orientation-inset {
+  pointer-events: none;
+}
+
+.inset-divider {
+  stroke: var(--line);
+  stroke-dasharray: 4 6;
+}
+
+.face-plane-fill {
+  fill: var(--fixed-fill);
+  stroke: var(--fixed-soft);
+  stroke-width: 1.5;
+}
+
+.screen-plane-fill {
+  fill: var(--accent);
+  stroke: var(--accent-deep);
+  stroke-width: 1.4;
+}
+
+.relation-text {
+  fill: var(--accent-deep);
+}
+
+.controls {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid rgba(226, 230, 239, 0.88);
+  background: rgba(246, 247, 251, 0.96);
+}
+
+.control-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 128px;
+  padding: 10px 18px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent);
+  color: #ffffff;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.control-button svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.control-button:focus-visible {
+  outline: 3px solid var(--accent-soft);
+  outline-offset: 2px;
+}
+
+.motion-note {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.moving-layer,
+.anim-target {
+  animation-duration: 3s;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+
+/* 左右平移: 外层以手腕为支点转动, 内层反向校正手机和手掌, 因此手机中心走弧线但屏幕朝向不变。 */
+.scene-translate .s1-orbit {
+  animation-name: s1-orbit;
+  transform-box: view-box;
+  transform-origin: 180px 298px;
+}
+
+.scene-translate .s1-level {
+  animation: s1-level 3s ease-in-out infinite;
+  transform-box: view-box;
+  transform-origin: 180px 198px;
+}
+
+@keyframes s1-orbit {
+  0%,
+  12% {
+    transform: rotate(-22deg);
+  }
+  50%,
+  62% {
+    transform: rotate(22deg);
+  }
+  100% {
+    transform: rotate(-22deg);
+  }
+}
+
+@keyframes s1-level {
+  0%,
+  12% {
+    transform: rotate(22deg);
+  }
+  50%,
+  62% {
+    transform: rotate(-22deg);
+  }
+  100% {
+    transform: rotate(22deg);
+  }
+}
+
+/* 左右摆动: 手机中心固定, 只绕自身竖直中轴 rotateY; 法向箭头同步左右偏转。 */
+.scene-yaw .s2-phone-grip {
+  animation-name: s2-yaw;
+  transform-box: view-box;
+  transform-origin: 180px 198px;
+  transform-style: preserve-3d;
+}
+
+.scene-yaw .s2-normal {
+  animation-name: s2-normal;
+  transform-box: view-box;
+  transform-origin: 180px 198px;
+}
+
+@keyframes s2-yaw {
+  0%,
+  12% {
+    transform: perspective(480px) rotateY(-30deg);
+  }
+  50%,
+  62% {
+    transform: perspective(480px) rotateY(30deg);
+  }
+  100% {
+    transform: perspective(480px) rotateY(-30deg);
+  }
+}
+
+@keyframes s2-normal {
+  0%,
+  12% {
+    transform: rotate(-30deg);
+  }
+  50%,
+  62% {
+    transform: rotate(30deg);
+  }
+  100% {
+    transform: rotate(-30deg);
+  }
+}
+
+/* 前后摆动: 侧视中手掌和手机绕手腕支点摆动, 手机靠近/远离固定人脸; 轻微缩放强化深度变化。 */
+.scene-depth .s3-swing {
+  animation-name: s3-swing;
+  transform-box: view-box;
+  transform-origin: 260px 322px;
+}
+
+.scene-depth .s3-size {
+  animation: s3-size 3s ease-in-out infinite;
+  transform-box: view-box;
+  transform-origin: 222px 218px;
+}
+
+.scene-depth .s3-ruler-current {
+  animation-name: s3-ruler;
+  transform-box: fill-box;
+  transform-origin: 0 50%;
+}
+
+@keyframes s3-swing {
+  0%,
+  12% {
+    transform: rotate(-18deg);
+  }
+  50%,
+  62% {
+    transform: rotate(16deg);
+  }
+  100% {
+    transform: rotate(-18deg);
+  }
+}
+
+@keyframes s3-size {
+  0%,
+  12% {
+    transform: scale(1.05);
+  }
+  50%,
+  62% {
+    transform: scale(0.92);
+  }
+  100% {
+    transform: scale(1.05);
+  }
+}
+
+@keyframes s3-ruler {
+  0%,
+  12% {
+    transform: scaleX(0.68);
+  }
+  50%,
+  62% {
+    transform: scaleX(1.32);
+  }
+  100% {
+    transform: scaleX(0.68);
+  }
+}
+
+.inset-translate {
+  animation: inset-translate 3s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.inset-yaw {
+  animation: inset-yaw 3s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: 160px 102px;
+}
+
+.inset-depth {
+  animation: inset-depth 3s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes inset-translate {
+  0%,
+  12% {
+    transform: translateX(-42px);
+  }
+  50%,
+  62% {
+    transform: translateX(42px);
+  }
+  100% {
+    transform: translateX(-42px);
+  }
+}
+
+@keyframes inset-yaw {
+  0%,
+  12% {
+    transform: rotate(-30deg);
+  }
+  50%,
+  62% {
+    transform: rotate(30deg);
+  }
+  100% {
+    transform: rotate(-30deg);
+  }
+}
+
+@keyframes inset-depth {
+  0%,
+  12% {
+    transform: translateY(-22px);
+  }
+  50%,
+  62% {
+    transform: translateY(12px);
+  }
+  100% {
+    transform: translateY(-22px);
+  }
+}
+
+.pivot-halo {
+  animation: pivot-pulse 2.4s ease-out infinite;
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+}
+
+@keyframes pivot-pulse {
+  0% {
+    opacity: 0.24;
+    transform: scale(1);
+  }
+  72%,
+  100% {
+    opacity: 0;
+    transform: scale(2.5);
+  }
+}
+
+.is-paused * {
+  animation-play-state: paused !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .moving-layer,
+  .anim-target,
+  .pivot-halo,
+  .s1-level,
+  .s3-size,
+  .inset-translate,
+  .inset-yaw,
+  .inset-depth {
+    animation: none !important;
+  }
+
+  .scene-translate .s1-orbit,
+  .scene-translate .s1-level,
+  .scene-yaw .s2-phone-grip,
+  .scene-yaw .s2-normal,
+  .scene-depth .s3-swing,
+  .scene-depth .s3-size,
+  .scene-depth .s3-ruler-current,
+  .inset-translate,
+  .inset-yaw,
+  .inset-depth {
+    transform: none !important;
+  }
+}
+
+.reduced-active .moving-layer,
+.reduced-active .anim-target,
+.reduced-active .pivot-halo,
+.reduced-active .s1-level,
+.reduced-active .s3-size,
+.reduced-active .inset-translate,
+.reduced-active .inset-yaw,
+.reduced-active .inset-depth {
+  animation: none !important;
+}
+
+.reduced-active .scene-translate .s1-orbit,
+.reduced-active .scene-translate .s1-level,
+.reduced-active .scene-yaw .s2-phone-grip,
+.reduced-active .scene-yaw .s2-normal,
+.reduced-active .scene-depth .s3-swing,
+.reduced-active .scene-depth .s3-size,
+.reduced-active .scene-depth .s3-ruler-current,
+.reduced-active .inset-translate,
+.reduced-active .inset-yaw,
+.reduced-active .inset-depth {
+  transform: none !important;
+}
+
+@media (max-width: 940px) {
+  .app-shell {
+    max-width: 470px;
+  }
+
+  .scene-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 430px) {
+  .motion-page {
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+
+  .app-header h1 {
+    font-size: 24px;
+  }
+
+  .app-header p {
+    font-size: 14px;
+  }
+
+  .gesture-card {
+    padding: 10px;
+  }
+
+  .card-title h2 {
+    font-size: 17px;
+  }
+
+  .caption {
+    font-size: 15px;
+  }
+}

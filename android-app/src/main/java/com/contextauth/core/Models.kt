@@ -85,10 +85,10 @@ enum class TaskCategory(
     C7(
         "显式转腕挑战",
         "手腕转动",
-        "按动画指示做标准化左右摇摆、左右平移与前后内收动作",
+        "按动画指示做标准化左右平移、左右转动与前后摆动动作",
         "Explicit wrist rotation",
         "Wrist rotation",
-        "Follow the animation to perform standardized left-right swing, lateral translation, and forward-back flexion"
+        "Follow the animation to perform standardized left-right translation, left-right rotation, and forward-back swing"
     );
 
     val displayName: String
